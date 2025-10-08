@@ -1,0 +1,7 @@
+{
+  "name": "filesystem_host",
+  "transport": "stdio",
+  "description": "host filesystem mcp",
+  "command": "npx",
+  "args": ["-y", "@modelcontextprotocol/server-filesystem", "/Users/adam/mcp-playground"]
+}
