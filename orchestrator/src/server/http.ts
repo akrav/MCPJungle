@@ -95,19 +95,19 @@ app.post('/mcp', async (req, res) => {
       },
       { retries: 2, baseMs: 50 },
     );
-    // Stream response if possible for progress relay
-    if (upstream.body) {
-      res.setHeader(
-        'Content-Type',
-        upstream.headers.get('content-type') ?? 'application/json',
-      );
+    // Stream response if upstream is OK and JSON; otherwise map to JSON-RPC error or parse JSON body
+    const upstreamContentType = upstream.headers.get('content-type') ?? '';
+    const isJson = typeof upstreamContentType === 'string' && upstreamContentType.startsWith('application/json');
+    if (upstream.ok && upstream.body && isJson) {
+      res.setHeader('Content-Type', upstreamContentType || 'application/json');
       Readable.fromWeb(upstream.body as WebReadableStream).pipe(res);
       return;
     }
-    // Fallback: parse as JSON and return
+    // Fallback: read the body, try JSON parse, else wrap as ServerError
     const text = await upstream.text();
     try {
-      return res.json(JSON.parse(text));
+      const parsed = JSON.parse(text);
+      return res.json(parsed);
     } catch {
       return res.json(ServerError(id, upstream.status));
     }
