@@ -27,3 +27,6 @@ Forward a single JSON-RPC object to **MCPJungle `/mcp`** and stream back the res
 `undici fetch`, `ReadableStream`, `pipe`, `proxy`, `pass-through`, `X-Forwarded-For`
 
 ---
+
+
+Status: Completed - 2025-10-11

@@ -5,7 +5,11 @@ describe('logger redaction', () => {
   it('redacts tokens and auth headers', () => {
     const spy = vi.spyOn(console, 'log').mockImplementation(() => {});
     try {
-      log('info', 'test', { Authorization: 'Bearer secret', refresh_token: 'abc', nested: { apiKey: 'k' } });
+      log('info', 'test', {
+        Authorization: 'Bearer secret',
+        refresh_token: 'abc',
+        nested: { apiKey: 'k' },
+      });
       expect(spy).toHaveBeenCalledTimes(1);
       const arg = spy.mock.calls[0][0] as string;
       const obj = JSON.parse(arg);
@@ -17,5 +21,3 @@ describe('logger redaction', () => {
     }
   });
 });
-
-

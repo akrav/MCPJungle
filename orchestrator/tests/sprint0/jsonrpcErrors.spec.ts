@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { InvalidRequest, MethodNotFound, InternalError, ServerError } from '../../src/jsonrpc/errors';
+import {
+  InvalidRequest,
+  MethodNotFound,
+  InternalError,
+  ServerError,
+} from '../../src/jsonrpc/errors';
 
 describe('jsonrpc errors', () => {
   it('builds standard errors', () => {

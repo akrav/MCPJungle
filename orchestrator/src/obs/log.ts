@@ -29,11 +29,11 @@ export function log(
     ts: new Date().toISOString(),
   } as Record<string, unknown>;
 
-  const redacted = fields ? (redact(fields) as Record<string, unknown>) : undefined;
+  const redacted = fields
+    ? (redact(fields) as Record<string, unknown>)
+    : undefined;
   const payload = redacted ? { ...base, ...redacted } : base;
 
   // eslint-disable-next-line no-console
   console.log(JSON.stringify(payload));
 }
-
-
