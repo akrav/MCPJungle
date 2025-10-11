@@ -1,36 +1,31 @@
-Awesome — here’s your **Sprint 7 Overview** in the *exact same style* as S0–S6: small 10–30-minute tickets, explicit file locations, tests, run commands, a **plain-English** explainer for each, and **LLM priming** blocks so a decoder-only model gravitates to the right patterns.
-
-**Theme:** **Router & Catalog Manager — Foundations (behind a flag)**
-We keep **MCPJungle as the only upstream** and remain a pass-through for production calls. This sprint adds an **internal catalog merge** (name normalization, dedupe, TTL cache with SWR) and a **shadow-mode router** that *observes* traffic and computes target routing, but does not change live behavior yet. We rely on MCP’s discovery (`tools/list`) and execution (`tools/call`) semantics and JSON-RPC 2.0 envelopes. ([Model Context Protocol][1])
-
-We also wire sane caching hints (TTL & **stale-while-revalidate**) and verify ID-echo invariants remain untouched. ([IETF Datatracker][2])
-
----
-
-# Sprint 7 — Router & Catalog Manager (foundations, shadow-mode)
+# Sprint 7 — Router & Catalog Manager (foundations, shadow-mode) — Updated
 
 **Goal**
-Introduce **Catalog Manager v1** (normalize names, merge/dedupe tools, TTL + SWR cache) and an **internal Router v1 (shadow-mode)** that predicts routing targets without affecting real traffic. Keep the public `/mcp` behavior unchanged (pass-through to Jungle). Add observability to compare “shadow route” vs “actual route” for later cutover.
+Introduce **Catalog Manager v1** (canonical names, merge/dedupe, TTL + SWR cache) and a **Router v1 (shadow-mode)** that predicts targets without touching live traffic. Public `/mcp` behavior remains a **pass-through** to Jungle. Add observability to compare “shadow route” vs “actual route” for later cutover. 
+
+**What changed (merge)**
+
+* **702 + 703 → 702** “Catalog core (canonical IDs + merge/dedupe)”.
 
 **Rule of engagement**
-Do tickets **in order**. For each ticket: write code → write tests → **run tests** → fix until green → **commit & push**. If a test fails, **loop & debug** until green, then push.
+Do tickets **in order**. For each ticket: write code → write tests → **run tests** → fix until green → **commit & push**.
 
-**Repo (new/updated files below)**
+**Repo (new/updated files)**
 
 ```
 /orchestrator
   /src
-    catalog/normalize.ts           # NEW
-    catalog/merge.ts               # NEW
-    catalog/cache.ts               # NEW (TTL + SWR)
-    router/shadow.ts               # NEW (shadow route planner)
-    router/policy.ts               # NEW (selection rules)
+    catalog/normalize.ts
+    catalog/merge.ts
+    catalog/cache.ts
+    router/shadow.ts
+    router/policy.ts
     obs/log.ts
     obs/otel.ts
     server/{http.ts,proxy.ts,jungleClient.ts}
     jsonrpc/{types.ts,validate.ts,errors.ts}
     config/{schema.ts,load.ts}
-  /tests/sprint7                    # NEW
+  /tests/sprint7
     norm_names.spec.ts
     merge_dedupe.spec.ts
     cache_ttl_swr.spec.ts
@@ -40,302 +35,248 @@ Do tickets **in order**. For each ticket: write code → write tests → **run t
     shadow_vs_actual_metrics.spec.ts
     id_invariants_still_hold.spec.ts
     readme_catalog_toggle.spec.ts
-  README.md (updated: feature flag + docs)
+  README.md (feature flags + docs)
 ```
 
 ---
 
-## Ticket-701 — Config flag: enable shadow router & catalog
+## Ticket-701 — Config flags for catalog & shadow router
 
 **What / Why**
-Add env flags to **turn on catalog building and shadow routing** without affecting live calls: `ORCH_ENABLE_CATALOG=false`, `ORCH_ENABLE_SHADOW_ROUTER=false`.
+Feature toggles to enable catalog building and shadow routing without affecting live behavior:
+`ORCH_ENABLE_CATALOG=false`, `ORCH_ENABLE_SHADOW_ROUTER=false`.
 
 **Where**
-`/src/config/schema.ts`, `/src/config/load.ts`
-
-**Implementation sketch**
-
-* Zod booleans with defaults.
-* Expose in `loadConfig()`.
+`/src/config/{schema.ts,load.ts}` (Zod booleans), README update.
 
 **Tests**
-`/tests/sprint7/readme_catalog_toggle.spec.ts`: validates README shows flags and schema parses them.
+`readme_catalog_toggle.spec.ts` ensures flags are documented and parsed.
 
 **Accept when**
-Flags parse; README documents toggles.
-
-**Plain English**
-
-> Add switches so we can test new pieces without changing behavior.
+Flags parse with defaults; README shows how to turn them on.
 
 **LLM priming**
-`Zod boolean().default(false)`, `env flags`, `feature toggle`, `README doc` ([MDN Web Docs][3])
+`z.boolean().default(false)`, `process.env`, `feature toggle`, `README section: "Router & Catalog (shadow)"`
 
 ---
 
-## Ticket-702 — Name normalization helper (canonical tool IDs)
+## Ticket-702 — Catalog core: **canonical IDs + merge/dedupe**  *(merged)*
 
 **What / Why**
-Normalize server & tool names into a **canonical identifier** `server__tool` (lowercase, kebab/underscore policy; strip spaces). MCP tools are identified by names exposed via `tools/list`. ([Model Context Protocol][1])
+Normalize names to `server__tool` and merge multiple `tools/list` sources into a stable, deduped catalog.
 
 **Where**
-`/src/catalog/normalize.ts`
+`/src/catalog/normalize.ts`, `/src/catalog/merge.ts`
 
 **Implementation sketch**
 
-* Export `canonicalId(serverName, toolName)`; slugify with allowed charset `[a-z0-9_]+`; replace invalids with `_`.
+* `canonicalId(server, tool)`: lowercase, `[a-z0-9_]`, replace others with `_`.
+* Merge inputs `{server, tools[]}` → output array of `{id,name,server,desc,schemaHash,sources[]}`; prefer first occurrence; **stable sort** (server then tool).
 
 **Tests**
-`/tests/sprint7/norm_names.spec.ts`: table tests (spaces, unicode, punctuation) → stable canonical ids.
+
+* `norm_names.spec.ts`: table tests (spaces/unicode/punct).
+* `merge_dedupe.spec.ts`: duplicates collapse; order deterministic.
 
 **Accept when**
-Inputs map deterministically to canonical ids.
+IDs are deterministic; merged list has no dupes and stable ordering.
 
 **Plain English**
 
-> Make every tool get a simple, consistent ID like `search__web`.
+> Give every tool a clean, consistent ID and stitch all menus into one without duplicates.
 
 **LLM priming**
-`slugify`, `lowercase`, `replace(/[^a-z0-9_]/g,'_')`, `server__tool`
+`slugify`, `Map by key`, `stable sort`, `schema hash`
 
 ---
 
-## Ticket-703 — Catalog merge (dedupe + stable sort)
+## Ticket-703 — Cache: TTL + stale-while-revalidate (SWR)
 
 **What / Why**
-Combine multiple `tools/list` pages into **one merged list** with **dedupe** by canonical id and stable ordering (server name, then tool). MCP discovery relies on `tools/list`. ([Model Context Protocol][1])
-
-**Where**
-`/src/catalog/merge.ts`
-
-**Implementation sketch**
-
-* Accept arrays `{server, tools[]}`; produce merged: `{id,name,server,desc,schemaHash}`.
-* If duplicates collide, prefer first occurrence; record `sources`.
-
-**Tests**
-`/tests/sprint7/merge_dedupe.spec.ts`: duplicates collapse; sort order deterministic.
-
-**Accept when**
-Merged list has no dupes and stable order.
-
-**Plain English**
-
-> Stitch lots of “menus” into one menu without duplicates.
-
-**LLM priming**
-`stable sort`, `Map` by `canonicalId`, `merge arrays`, `schema hash`
-
----
-
-## Ticket-704 — Cache: TTL + stale-while-revalidate (SWR)
-
-**What / Why**
-Add a small in-memory cache for **catalog** with TTL (e.g., 60s) and **SWR**: serve stale while refreshing in background. Use HTTP caching concepts adapted in-process. ([IETF Datatracker][2])
+Serve catalog from a tiny in-memory cache with **TTL** (e.g., 60s) and **SWR** (serve stale, refresh in background).
 
 **Where**
 `/src/catalog/cache.ts`
 
 **Implementation sketch**
 
-* `getCatalog()` returns fresh if age < TTL; else returns stale immediately and kicks off refresh promise; exposes `staleAge`/`updatedAt`.
+* `getCatalog()` returns fresh if age < TTL; else returns stale immediately and triggers a refresh Promise (dedup in-flight).
 
 **Tests**
-`/tests/sprint7/cache_ttl_swr.spec.ts`: first miss → fetch; second hit → cached; after TTL → serve stale & trigger refresh.
+`cache_ttl_swr.spec.ts`: first miss → fetch; cached hit; after TTL → stale returned + refresh kicked.
 
 **Accept when**
-Behavior matches TTL+SWR semantics.
+Semantics match TTL+SWR; no duplicate refreshes.
 
 **Plain English**
 
-> If the catalog is a bit old, show it now and refresh in the background.
+> If the list is slightly old, show it now and quietly refresh.
 
 **LLM priming**
-`stale-while-revalidate`, `max-age`, `updatedAt`, `in-flight refresh dedupe`
+`maxAge`, `stale-while-revalidate`, `in-flight promise dedupe`, `updatedAt`
 
 ---
 
-## Ticket-705 — Integration: build catalog from Jungle `tools/list`
+## Ticket-704 — Integration: build catalog from Jungle `tools/list`
 
 **What / Why**
-When `ORCH_ENABLE_CATALOG=true`, call Jungle’s `/mcp` with JSON-RPC `tools/list`, then **normalize → merge → cache**. Keep pass-through behavior for the agent unchanged. ([GitHub][4])
+When `ORCH_ENABLE_CATALOG=true`, fetch Jungle’s `tools/list` on boot and per-TTL, then **normalize → merge → cache**. Public proxying stays unchanged.
 
 **Where**
-Wire in `server/http.ts` (background task) and `catalog/*`
-
-**Implementation sketch**
-
-* On boot (and every TTL), fetch list from Jungle, transform & cache.
-* Expose debug route `GET /_debug/catalog` (auth-gated) to view current snapshot.
+Hook in `server/http.ts` (background task) + `catalog/*`; add auth-gated `GET /_debug/catalog`.
 
 **Tests**
-`/tests/sprint7/list_catalog_integ.spec.ts`: mock Jungle; assert snapshot matches expected merged output.
+`list_catalog_integ.spec.ts`: mock Jungle; snapshot output matches expected merged catalog.
 
 **Accept when**
-Catalog compiles and is viewable via debug route.
+Catalog builds and is viewable at `/_debug/catalog`.
 
 **Plain English**
 
-> Periodically pull Jungle’s tools and keep a clean, cached list.
+> Periodically pull Jungle’s tools and keep a clean, cached snapshot.
 
 **LLM priming**
-`tools/list`, `JSON-RPC 2.0 request`, `undici fetch`, `debug route`
+`JSON-RPC 2.0 request`, `tools/list`, `undici fetch`, `debug route`
 
 ---
 
-## Ticket-706 — Shadow router: request → predicted target
+## Ticket-705 — Shadow router: compute **predicted** target (no live changes)
 
 **What / Why**
-For each inbound JSON-RPC call, compute (in **shadow-mode**) the **target server** using catalog metadata (e.g., match `server__tool` prefix). **Do not** alter real routing; only log/trace the predicted route. MCP remains pass-through. ([Model Context Protocol][5])
+For each inbound call, compute a **predicted** route using the catalog. Do **not** alter real routing; just log/trace.
 
 **Where**
-`/src/router/shadow.ts`
-
-**Implementation sketch**
-
-* `planRoute(req)` returns `{targetServer, reason}`; uses catalog; default `jungle`.
-* Hook in `server/http.ts` to run alongside real proxy.
+`/src/router/shadow.ts` (pure planner), hook from `server/http.ts`.
 
 **Tests**
-`/tests/sprint7/shadow_route_plan.spec.ts`: inputs → deterministic predictions; unknown tool → `jungle`.
+`shadow_route_plan.spec.ts`: deterministic predictions; unknown → default `jungle`.
 
 **Accept when**
-Planner is pure and deterministic.
+Planner is pure and deterministic; wiring runs alongside proxy.
 
 **Plain English**
 
-> Quietly compute where we *would* send the call—without actually changing anything.
+> Quietly decide where we *would* send the call—without actually doing it.
 
 **LLM priming**
 `pure function`, `deterministic`, `shadow mode`, `catalog lookup`
 
 ---
 
-## Ticket-707 — Router policy module (selection rules)
+## Ticket-706 — Router policy module (rule priority)
 
 **What / Why**
-Encapsulate **routing rules** (exact match, wildcard, fallback). Keep small and testable.
+Encapsulate rule priority: exact `server__tool` → server-only wildcard → fallback.
 
 **Where**
 `/src/router/policy.ts`
 
+**Tests**
+`policy_selection.spec.ts`: table-driven cases for exact/wildcard/fallback.
+
+**Accept when**
+Selection follows the priority table.
+
+**Plain English**
+
+> The rules for picking a server live in one tiny, testable place.
+
+**LLM priming**
+`table-driven tests`, `precedence`, `exact vs wildcard vs fallback`
+
+---
+
+## Ticket-707 — Metrics: **shadow vs actual** route comparison
+
+**What / Why**
+Counters comparing **predicted** (shadow) vs **actual** (always Jungle today) to prep for cutover analysis.
+
+**Where**
+`/src/obs/otel.ts` (Meter), wired from `server/http.ts`.
+
 **Implementation sketch**
 
-* Export `selectTarget(canonicalToolId, catalog)`; implement priority: exact `server__tool` → server match → fallback.
+* Counter labels: `method`, `predicted`, `actual`, plus `match` boolean.
 
 **Tests**
-`/tests/sprint7/policy_selection.spec.ts`: table tests for rule priority and fallbacks.
+`shadow_vs_actual_metrics.spec.ts`: generate a few calls; assert counter deltas.
 
 **Accept when**
-Policies behave per the table.
+Metrics show matches/mismatches as expected.
 
 **Plain English**
 
-> Write the simple rules that decide which server we’d use.
+> Track how often our plan agrees with reality.
 
 **LLM priming**
-`rule priority`, `exact/wildcard/fallback`, `table-driven tests`
+`OpenTelemetry counter.add(1,{labels})`, `match vs mismatch`
 
 ---
 
-## Ticket-708 — Metrics: shadow vs actual route comparison
+## Ticket-708 — ID echo invariants still hold
 
 **What / Why**
-Emit counters to compare **shadow route** vs **actual route** (which is always Jungle today). Useful for later cutover safety.
+New modules must never touch JSON-RPC IDs. Re-assert string/number IDs are echoed exactly.
 
 **Where**
-`/src/obs/otel.ts` (meter), hook from `server/http.ts`
+Tests only: `/tests/sprint7/id_invariants_still_hold.spec.ts`
+
+**Accept when**
+IDs match exactly; shadow logs contain same IDs.
+
+**Plain English**
+
+> Even with the new parts, request IDs stay untouched.
+
+**LLM priming**
+`jsonrpc id echo`, `must not be null`, `string|number`
+
+---
+
+## Ticket-709 — Error envelopes remain spec-compliant
+
+**What / Why**
+Confirm JSON-RPC error codes & shapes are unchanged by new code paths.
+
+**Where**
+Extend sprint-4 mapping tests or add `/tests/sprint7/...` assertions.
 
 **Implementation sketch**
 
-* Counter labels: `method`, `predicted`, `actual`; `match=1`/`mismatch=1`.
-
-**Tests**
-`/tests/sprint7/shadow_vs_actual_metrics.spec.ts`: call a few methods; assert counters updated.
+* Drive non-JSON body and HTTP 5xx from Jungle; verify JSON-RPC mapping unchanged.
 
 **Accept when**
-Metrics reflect matches/mismatches.
+`-32600/-32601/-32603` and `-32000…-32099` shapes match prior behavior.
 
 **Plain English**
 
-> Count how often the shadow plan agrees with reality.
+> Clients must keep seeing the exact error shapes they expect.
 
 **LLM priming**
-`OpenTelemetry Meter`, `counter.add(1,{labels})`, `match vs mismatch` ([Model Context Protocol][5])
+`error.data.status`, `envelope shape`, `prior contract tests`
 
 ---
 
-## Ticket-709 — ID echo invariants re-verified
+## Ticket-710 — README: “Router & Catalog (shadow)” docs
 
 **What / Why**
-Ensure the new shadow layer **never** touches JSON-RPC IDs (MCP disallows `null` and requires unique IDs per session). ([Model Context Protocol][6])
-
-**Where**
-Tests only.
-
-**Implementation sketch**
-`/tests/sprint7/id_invariants_still_hold.spec.ts`: send numeric and string IDs; verify echoed unchanged and shadow log contains the same ID.
-
-**Accept when**
-IDs match exactly; no rewriting.
-
-**Plain English**
-
-> Even with the new parts, request IDs must remain untouched.
-
-**LLM priming**
-`jsonrpc id echo`, `string|number id`, `MUST NOT be null` ([Model Context Protocol][6])
-
----
-
-## Ticket-710 — Error handling remains spec-compliant
-
-**What / Why**
-Confirm JSON-RPC error codes & envelopes are unchanged by the new modules (InvalidRequest, Method not found, Server error etc.). ([jsonrpc.org][7])
-
-**Where**
-Extend existing tests or add assertions in `/tests/sprint7/...`
-
-**Implementation sketch**
-
-* Drive faults in mock Jungle (non-JSON body, 502) and verify mapping per earlier policy.
-
-**Accept when**
-Codes/messages match spec & prior behavior.
-
-**Plain English**
-
-> New code shouldn’t change error shapes clients rely on.
-
-**LLM priming**
-`-32600 -32601 -32603`, `-32000…-32099`, `envelope shape` ([jsonrpc.org][7])
-
----
-
-## Ticket-711 — README: “Router & Catalog (shadow)” docs
-
-**What / Why**
-Add a new section explaining what’s behind the flags, how canonical IDs are formed, TTL/SWR, and how to read “shadow vs actual” metrics.
+Explain canonical IDs, dedupe rules, TTL/SWR, feature flags, and “shadow vs actual” metrics.
 
 **Where**
 `/README.md`
 
-**Implementation sketch**
-
-* Explain `server__tool` canonicalization, dedupe rules, and why SWR keeps UX snappy. Include MCP links for `tools/list`/`tools/call`. ([Model Context Protocol][1])
-
 **Tests**
-`/tests/sprint7/readme_catalog_toggle.spec.ts`: grep for headings and code blocks.
+`readme_catalog_toggle.spec.ts`: grep headings and file references.
 
 **Accept when**
 Docs are clear and copy-pasteable.
 
 **Plain English**
 
-> Write down how this works and how to turn it on safely.
+> Write down how to turn it on and what to look at.
 
 **LLM priming**
-`server__tool`, `TTL`, `stale-while-revalidate`, `feature flag`, `tools/list` ([IETF Datatracker][2])
+`server__tool`, `TTL`, `stale-while-revalidate`, `feature flag`, `metrics`
 
 ---
 
@@ -343,15 +284,14 @@ Docs are clear and copy-pasteable.
 
 ```bash
 npm i
-# run only Sprint 7 tests
 npm run test -- tests/sprint7
 
-# turn the features on (dev)
+# (optional) turn features on locally
 export ORCH_ENABLE_CATALOG=true
 export ORCH_ENABLE_SHADOW_ROUTER=true
 npm run dev
 
-# optional: hit the debug endpoint
+# (optional) inspect snapshot
 curl -s localhost:8080/_debug/catalog | jq .
 ```
 
@@ -359,14 +299,6 @@ curl -s localhost:8080/_debug/catalog | jq .
 
 ### Why these priming cues work
 
-They mirror **exact protocol & web-caching terms and API names** common in high-quality examples: MCP `tools/list`/`tools/call` and lifecycle over JSON-RPC, **JSON-RPC 2.0** error codes & ID rules, **TTL** + **stale-while-revalidate** from HTTP caching, and **OpenTelemetry** counter metrics. That steers a decoder-only LLM toward **idiomatic, spec-correct** implementations that keep production behavior unchanged today while preparing for a clean cutover later. ([Model Context Protocol][1])
+They mirror the exact protocol & caching vocabulary you’re already using—MCP `tools/list`/`tools/call` via JSON-RPC 2.0, canonical `server__tool` IDs, **TTL + stale-while-revalidate**, and **OpenTelemetry** counters—so the agent falls into the correct, idiomatic implementations while keeping production behavior untouched. 
 
-If you’d like, I can split these into **per-ticket Markdown files** and scaffold the new modules/tests so several Sprint-7 tickets go green immediately.
-
-[1]: https://modelcontextprotocol.io/docs/concepts/tools?utm_source=chatgpt.com "Tools"
-[2]: https://datatracker.ietf.org/doc/html/rfc5861?utm_source=chatgpt.com "RFC 5861 - HTTP Cache-Control Extensions for Stale ..."
-[3]: https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Cache-Control?utm_source=chatgpt.com "Cache-Control header - HTTP - MDN - Mozilla"
-[4]: https://github.com/mcpjungle/MCPJungle?utm_source=chatgpt.com "mcpjungle/MCPJungle: Self-hosted MCP Gateway and ..."
-[5]: https://modelcontextprotocol.io/docs/concepts/architecture?utm_source=chatgpt.com "Architecture overview"
-[6]: https://modelcontextprotocol.io/specification/2024-11-05/basic/messages?utm_source=chatgpt.com "Messages"
-[7]: https://www.jsonrpc.org/specification?utm_source=chatgpt.com "JSON-RPC 2.0 Specification"
+If you want, I can also spit out tiny **skeleton files** (headers + TODOs + example asserts) so several tickets go green with near-zero extra calls.

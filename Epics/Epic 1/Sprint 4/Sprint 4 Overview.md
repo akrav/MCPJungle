@@ -1,22 +1,16 @@
-References we prime against:
-
-* **MCP** discovery/execute flow and Streamable HTTP (messages carried via JSON-RPC). ([Model Context Protocol][1])
-* **JSON-RPC 2.0** spec: ID echo, result XOR error, well-known error codes. ([jsonrpc.org][2])
-* **Load testing** tools & guides: **k6** and **Vegeta**. ([Grafana Labs][3])
-* **OpenTelemetry** Node traces/metrics and span practices. ([OpenTelemetry][4])
-* **Retry with jitter** best practices (timeouts/backoff). ([Amazon Web Services, Inc.][5])
-* **Chaos** engineering primers. ([Gremlin][6])
-* **SRE** readiness & launch checklists. ([Google SRE][7])
-
----
-
-# Sprint 4 — MVP Test & Stabilization
+# Sprint 4 — MVP Test & Stabilization (Updated, Sequential IDs)
 
 **Goal**
 Prove the MVP is reliable. Add tight **contract tests** for MCP behaviors, **load tests** (steady and spiky), targeted **chaos drills** (Jungle restart / latency / packet loss), correctness checks for **progress ordering** and **cancel**, and validation for **timeouts/retries** with jitter. Document a tiny **runbook** and **test matrix**.
 
+**What changed (merges kept, numbering fixed)**
+
+* **Discovery + Execute contract** combined into a single pass-through suite.
+* **k6 smokes** (list + call with progress) combined into one script with two scenarios.
+* All tickets renumbered sequentially (no gaps).
+
 **Rule of engagement**
-Do tickets **in order**. For each ticket: write code → write tests → **run tests** → fix until green → **commit & push**. If a test fails, **loop & debug** until green, then push.
+Do tickets **in order**. For each ticket: write code → write tests → **run tests** → fix until green → **commit & push**. If a test fails, loop & debug until green, then push.
 
 **Repo (new/updated files called out below)**
 
@@ -26,16 +20,14 @@ Do tickets **in order**. For each ticket: write code → write tests → **run t
     … (no new runtime features this sprint)
   /tests/sprint4
     contract_initialize.spec.ts
-    contract_tools_list.spec.ts
-    contract_tools_call.spec.ts
+    contract_pass_through.spec.ts          # merged (list + call)
     progress_ordering.spec.ts
     cancel_single_terminal.spec.ts
     timeout_behavior.spec.ts
     retry_jitter.spec.ts
     http_error_mapping.spec.ts
     batch_rejection_e2e.spec.ts
-    k6/list_smoke.js
-    k6/call_smoke.js
+    k6/smoke_scenarios.js                  # merged (two scenarios)
     vegeta/targets.list
     vegeta/run_const_rate.sh
     chaos/jungle_restart.sh
@@ -54,90 +46,75 @@ Do tickets **in order**. For each ticket: write code → write tests → **run t
 ## Ticket-401 — Contract test: `initialize` handshake
 
 **What / Why**
-Byte-for-byte JSON-RPC contract for `initialize`: `jsonrpc:"2.0"`, ID echo, non-null `result` with server info. ([jsonrpc.org][2])
+Byte-for-byte JSON-RPC contract for `initialize`: `jsonrpc:"2.0"`, ID echo, non-null `result` with server info.
 
 **Where**
 `/tests/sprint4/contract_initialize.spec.ts`
 
 **Implementation sketch**
 
-* Use **Supertest** to POST `initialize` and deep-equal response (minus dynamic fields).
-* Compare against goldens if helpful (reuse Sprint-0 fixtures).
+* Use **Supertest** to POST `initialize` and deep-equal the envelope (mask dynamic fields).
+* Optional: compare to known goldens.
 
 **Accept when**
-All assertions pass; response conforms to JSON-RPC 2.0.
+
+* Response conforms to JSON-RPC 2.0 (result XOR error, id echo), assertions pass.
 
 **Plain English**
 
-> Prove the hello handshake is exactly the shape clients expect.
+> Prove the hello handshake matches exactly what clients expect.
 
 **LLM priming**
-`supertest`, `expect(res.body).toEqual(...)`, `jsonrpc: "2.0"`, `id echo`, `result XOR error` ([jsonrpc.org][2])
+`supertest`, `expect(res.body).toEqual(...)`, `jsonrpc: "2.0"`, `id echo`, `result XOR error`
 
 ---
 
-## Ticket-402 — Contract test: `tools/list` pass-through
+## Ticket-402 — Contract pass-through: `tools/list` **and** `tools/call`  *(merged)*
 
 **What / Why**
-Verify **no mutation** of Jungle’s `tools/list` envelope (IDs, fields, ordering). MCP discovery should be pass-through. ([Model Context Protocol][1])
+One suite that proves **no mutation** of envelopes for discovery (`tools/list`) and execution (`tools/call`), including ID preservation and stream reassembly.
 
 **Where**
-`/tests/sprint4/contract_tools_list.spec.ts`
+`/tests/sprint4/contract_pass_through.spec.ts`
 
 **Implementation sketch**
 
-* Mock Jungle returns a deterministic tool list; compare equality.
+* Mock Jungle with deterministic responses:
+
+  * **list**: stable order/fields.
+  * **call**: nested JSON payload + streamed chunks.
+* Buffer streamed chunks, `JSON.parse`, and `deepStrictEqual` vs mocks.
+* Verify `content-type: application/json`.
 
 **Accept when**
-Bodies match exactly; headers content-type correct.
+
+* Exact body match for both list and call; ID preserved; streaming reassembles identically.
 
 **Plain English**
 
-> When the agent asks “what tools exist?”, we hand back Jungle’s answer unchanged.
+> We pass back exactly what Jungle said—no edits, no reorder.
 
 **LLM priming**
-`tools/list`, `deepStrictEqual`, `application/json`
+`tools/list`, `tools/call`, `exact envelope`, `stream→buffer→JSON.parse`, `deepStrictEqual`, `application/json`
 
 ---
 
-## Ticket-403 — Contract test: `tools/call` pass-through
+## Ticket-403 — Progress ordering & timeliness
 
 **What / Why**
-Ensure `tools/call` responses (including nested results) are **unmodified** and ID is preserved. ([Model Context Protocol][1])
-
-**Where**
-`/tests/sprint4/contract_tools_call.spec.ts`
-
-**Implementation sketch**
-
-* Mock Jungle returns a complex JSON payload; assert strict equality & ID echo.
-
-**Accept when**
-Exact match; streaming chunks reconstruct to identical JSON.
-
-**Plain English**
-
-> When a tool runs, we return exactly what Jungle said.
-
-**LLM priming**
-`tools/call`, `exact envelope`, `stream to buffer then JSON.parse`
-
----
-
-## Ticket-404 — Progress ordering & timeliness
-
-**What / Why**
-Validate **in-order** progress frames arrive progressively (no end-buffering). Streamable HTTP implies incremental delivery. ([OpenAI GitHub][8])
+Validate **in-order** progress frames arrive progressively (no end-buffering). Streamable HTTP must deliver incrementally.
 
 **Where**
 `/tests/sprint4/progress_ordering.spec.ts`
 
 **Implementation sketch**
 
-* Mock emits 3 progress chunks with delays; measure arrival timestamps; assert order and max inter-chunk delay threshold.
+* Mock emits 3 progress chunks with staggered delays.
+* Capture arrival times; assert order and a max inter-chunk delay threshold.
 
 **Accept when**
-Chunks are ordered and timely.
+
+* Chunks are ordered and timely.
 
 **Plain English**
 
@@ -148,7 +125,7 @@ Chunks are ordered and timely.
 
 ---
 
-## Ticket-405 — Cancel: single terminal event
+## Ticket-404 — Cancel: single terminal event
 
 **What / Why**
 After cancel, we must see **exactly one** terminal event (cancel OR final)—never both.
@@ -158,10 +135,12 @@ After cancel, we must see **exactly one** terminal event (cancel OR final)—nev
 
 **Implementation sketch**
 
-* Start long `tools/call`; send cancel; assert either cancel ack OR final, but not both.
+* Start long `tools/call`; send cancel; assert either cancel ack **or** final, not both.
+* Ensure stream closes, no double-finalization.
 
 **Accept when**
-No double-finalization; stream closes.
+
+* Single terminal outcome; stream closed.
 
 **Plain English**
 
@@ -172,44 +151,48 @@ No double-finalization; stream closes.
 
 ---
 
-## Ticket-406 — Timeout behavior is bounded & clear
+## Ticket-405 — Timeout behavior is bounded & clear
 
 **What / Why**
-If Jungle stalls, we **AbortController** on timeout and return a **JSON-RPC server error** containing status context; span status is ERROR. ([OpenTelemetry][4])
+If Jungle stalls, use **AbortController** and return a **JSON-RPC server error** with timeout context; span status = ERROR.
 
 **Where**
 `/tests/sprint4/timeout_behavior.spec.ts`
 
 **Implementation sketch**
 
-* Mock stalls; assert JSON-RPC error (e.g., `-32000`), message includes “timeout”; ensure no leaked handles.
+* Mock stall. Assert JSON-RPC error (e.g., `-32000`), message includes “timeout”.
+* Verify no leaked handles; span marked ERROR.
 
 **Accept when**
-Bounded latency; clean shutdown.
+
+* Bounded latency; clear error; clean shutdown.
 
 **Plain English**
 
 > Don’t hang forever—time out and report it clearly.
 
 **LLM priming**
-`AbortController`, `AbortSignal.timeout`, `-32000 server error`, `finally res.end()` ([OpenTelemetry][4])
+`AbortController`, `AbortSignal.timeout`, `-32000 server error`, `finally res.end()`, `SpanStatusCode.ERROR`
 
 ---
 
-## Ticket-407 — Retry jitter correctness (502/503 only)
+## Ticket-406 — Retry jitter correctness (502/503 only)
 
 **What / Why**
-Unit-test **exponential backoff with jitter**, capped, for 502/503 only (others not retried). ([Amazon Web Services, Inc.][5])
+Unit-test **exponential backoff with jitter**, capped, retried only on 502/503.
 
 **Where**
 `/tests/sprint4/retry_jitter.spec.ts`
 
 **Implementation sketch**
 
-* Fake timers; assert attempt schedule (100ms → ~300ms with jitter); stop after cap; non-retryable codes skip.
+* Fake timers. Assert schedule (e.g., 100ms → ~300ms with jitter), cap honored.
+* Non-retryable codes skip.
 
 **Accept when**
-Schedule follows backoff+jitter and respects caps.
+
+* Schedule follows backoff+jitter; caps respected; other codes not retried.
 
 **Plain English**
 
@@ -220,44 +203,46 @@ Schedule follows backoff+jitter and respects caps.
 
 ---
 
-## Ticket-408 — HTTP error → JSON-RPC error mapping
+## Ticket-407 — HTTP error → JSON-RPC error mapping
 
 **What / Why**
-When Jungle returns non-JSON-RPC HTTP errors (e.g., HTML 502), we wrap to **JSON-RPC error** (`-32000…-32099` reserved range) with status in `data`. ([jsonrpc.org][2])
+Map non-JSON-RPC HTTP errors (e.g., HTML 502) to **JSON-RPC error** (`-32000…-32099`) with status in `error.data`.
 
 **Where**
 `/tests/sprint4/http_error_mapping.spec.ts`
 
 **Implementation sketch**
 
-* Mock returns 502 text/html; assert JSON-RPC error envelope created with `data.status=502`.
+* Mock 502 text/html; assert envelope with `error.data.status=502`.
 
 **Accept when**
-Mapping is deterministic and spec-compliant.
+
+* Deterministic, spec-compliant mapping.
 
 **Plain English**
 
 > Turn plain HTTP failures into JSON-RPC-shaped errors.
 
 **LLM priming**
-`-32000 server error`, `error.data.status`, `content-type sniff` ([jsonrpc.org][2])
+`-32000 server error`, `error.data.status`, `content-type sniff`
 
 ---
 
-## Ticket-409 — E2E guard: batch rejection
+## Ticket-408 — E2E guard: batch rejection
 
 **What / Why**
-End-to-end test that **array bodies** are rejected with **InvalidRequest (-32600)** before proxying. ([jsonrpc.org][2])
+Reject array bodies with **InvalidRequest (-32600)** before proxying.
 
 **Where**
 `/tests/sprint4/batch_rejection_e2e.spec.ts`
 
 **Implementation sketch**
 
-* POST `[{…},{…}]`; assert JSON-RPC error and confirm mock Jungle received **zero** upstream calls.
+* POST `[{…},{…}]`; assert JSON-RPC error; confirm zero upstream calls.
 
 **Accept when**
-Always rejected; no upstream traffic.
+
+* Always rejected; no upstream traffic.
 
 **Plain English**
 
@@ -268,95 +253,76 @@ Always rejected; no upstream traffic.
 
 ---
 
-## Ticket-410 — k6 smoke: steady `tools/list`
+## Ticket-409 — k6 smoke: `tools/list` **and** `tools/call` with progress  *(merged)*
 
 **What / Why**
-Light **k6** smoke to hit `/mcp` `tools/list` at low RPS for N seconds; ensure success rate ≥ 99% and P95 latency sane. ([Grafana Labs][3])
+One **k6** script with two scenarios: steady `tools/list` + steady `tools/call` (mocked progress). Ensures ≥99% success and sane P95 latency under light load.
 
 **Where**
-`/tests/sprint4/k6/list_smoke.js`
+`/tests/sprint4/k6/smoke_scenarios.js`
 
 **Implementation sketch**
 
-* JS test uses `http.post()` with JSON-RPC body; thresholds on `http_req_duration` and `checks`.
+* Scenario A: `http.post()` JSON-RPC `tools/list`, thresholds on `http_req_duration`, success checks.
+* Scenario B: `tools/call` that streams progress; validate final envelope + timing.
 
 **Run**
-`k6 run tests/sprint4/k6/list_smoke.js`
+`k6 run tests/sprint4/k6/smoke_scenarios.js`
 
 **Accept when**
-Thresholds pass consistently.
+
+* Both scenarios pass checks and thresholds.
 
 **Plain English**
 
-> A tiny load test to see if the basics stay green.
+> Light load stays green—even while progress streams.
 
 **LLM priming**
-`k6 http.post`, `thresholds`, `vus`, `duration`, `checks` ([Grafana Labs][3])
+`k6 http.post`, `scenarios`, `check(res, {...})`, `thresholds`, `vus`, `duration`, `http_req_duration`
 
 ---
 
-## Ticket-411 — k6 smoke: steady `tools/call` with progress
+## Ticket-410 — Vegeta: constant-rate probe
 
 **What / Why**
-k6 script exercises `tools/call` that emits progress (mocked); assert success rate and modest latency while streaming. ([Grafana Labs][3])
-
-**Where**
-`/tests/sprint4/k6/call_smoke.js`
-
-**Implementation sketch**
-
-* Use a mock endpoint producing chunked progress; k6 validates final response and timing.
-
-**Accept when**
-Checks pass with progress under load.
-
-**Plain English**
-
-> Light load while progress streams—should still be smooth.
-
-**LLM priming**
-`k6`, `streaming scenario`, `check(res, {...})`, `http_req_duration`
-
----
-
-## Ticket-412 — Vegeta: constant-rate probe
-
-**What / Why**
-Run a **Vegeta** constant-rate probe (e.g., 50 rps for 30s) against `/mcp initialize` to measure error % and latency histograms. ([GitHub][9])
+Run **Vegeta** constant-rate probe (e.g., 50 rps for 30s) against `/mcp initialize`; report error % and latency histogram.
 
 **Where**
 `/tests/sprint4/vegeta/targets.list`, `/tests/sprint4/vegeta/run_const_rate.sh`
 
 **Implementation sketch**
 
-* `echo "POST http://localhost:8080/mcp"` in `targets.list` with JSON-RPC body; `vegeta attack -rate=50 -duration=30s | vegeta report`.
+* `targets.list` includes POST with JSON-RPC body.
+* `vegeta attack -rate=50 -duration=30s | vegeta report`.
 
 **Accept when**
-Non-zero success rate ~100%; P95 stable.
+
+* Success ≈ 100%; stable P95.
 
 **Plain English**
 
-> A short, steady “drill” to see latency and errors.
+> A short steady drill to check latency and errors.
 
 **LLM priming**
-`vegeta attack -rate`, `vegeta report`, `targets.list` ([GitHub][9])
+`vegeta attack -rate`, `vegeta report`, `targets.list`
 
 ---
 
-## Ticket-413 — Chaos: Jungle container restart
+## Ticket-411 — Chaos: Jungle container restart
 
 **What / Why**
-Chaos drill: restart the Jungle container mid-call; orchestrator should propagate failure cleanly (or retry if configured), without leaking file descriptors. ([Gremlin][6])
+Restart Jungle mid-call; orchestrator should propagate failure cleanly (or retry if configured), no descriptor leaks.
 
 **Where**
 `/tests/sprint4/chaos/jungle_restart.sh`
 
 **Implementation sketch**
 
-* `docker restart jungle` while a long call is running; assert client gets a single terminal JSON-RPC error and server stays healthy.
+* `docker restart jungle` while long call runs; assert a **single** terminal JSON-RPC error; health checks stay OK.
 
 **Accept when**
-One clean terminal; orchestrator remains healthy.
+
+* One clean terminal; orchestrator healthy afterward.
 
 **Plain English**
 
@@ -367,100 +333,104 @@ One clean terminal; orchestrator remains healthy.
 
 ---
 
-## Ticket-414 — Chaos: latency & packet loss (netem)
+## Ticket-412 — Chaos: latency & packet loss (netem)
 
 **What / Why**
-Inject **latency** and **packet loss** on the Jungle link and verify timeouts/retries behave per policy (bounded, jittered). ([Gremlin][6])
+Inject **latency** & **packet loss** on Jungle link; verify timeouts/retries follow policy (bounded, jittered).
 
 **Where**
 `/tests/sprint4/chaos/netem_latency.sh`, `/tests/sprint4/chaos/netem_loss.sh`
 
 **Implementation sketch**
 
-* Use `tc qdisc netem delay 200ms` and `loss 5%` on the docker network (or host).
-* Observe k6/Vegeta metrics and our JSON-RPC error rates.
+* `tc qdisc netem delay 200ms` and `loss 5%` on docker network/host.
+* Observe k6/Vegeta metrics and JSON-RPC error rates.
 
 **Accept when**
-Timeouts trigger; retries limited; service stays responsive.
+
+* Timeouts trigger; retries limited; service responsive.
 
 **Plain English**
 
-> The network will have bad days—make sure we’re predictable then.
+> The network will have bad days—be predictable then.
 
 **LLM priming**
-`tc qdisc netem`, `delay`, `loss`, `exponential backoff with jitter` ([Amazon Web Services, Inc.][5])
+`tc qdisc netem`, `delay`, `loss`, `exponential backoff with jitter`
 
 ---
 
-## Ticket-415 — OTel spans present & useful
+## Ticket-413 — OTel spans present & useful
 
 **What / Why**
-Assert spans for `initialize`, `tools/list`, `tools/call` exist with attributes (user/tenant/tool/latency) and that errors set span status. ([OpenTelemetry][4])
+Spans for `initialize`, `tools/list`, `tools/call` with key attrs (user/tenant/tool/latency); errors set span status.
 
 **Where**
 `/tests/sprint4/otel_span_assert.spec.ts`
 
 **Implementation sketch**
 
-* Use an in-memory/collector stub; verify spans and key attributes.
+* In-memory collector stub; verify names/attributes; failures mark `ERROR`.
 
 **Accept when**
-Spans appear with names/attrs; ERROR status on failures.
+
+* Spans present with attrs; ERROR status on failures.
 
 **Plain English**
 
 > Traces should tell the story without guessing.
 
 **LLM priming**
-`@opentelemetry/sdk-node`, `SpanStatusCode.ERROR`, `setAttribute` ([OpenTelemetry][4])
+`@opentelemetry/sdk-node`, `SpanStatusCode.ERROR`, `setAttribute`
 
 ---
 
-## Ticket-416 — SLO smoke checklist (doc)
+## Ticket-414 — SLO smoke checklist (doc)
 
 **What / Why**
-Write a one-page SLO **smoke** doc (latency/error thresholds for MVP) and a linkable checklist modeled after **PRR/launch checklists**. ([Google SRE][7])
+One-page SLO **smoke** doc (latency/error thresholds) + linkable checklist patterned after PRR/launch checklists. Include how to run k6/Vegeta and read outputs.
 
 **Where**
 `/tests/sprint4/slo_smoke_dashboard.md`, `/runbooks/test_matrix.md`
 
 **Implementation sketch**
 
-* Define provisional targets: success rate ≥ 99%, P95 latency budget for list/call, max error burst, etc.; record how to run k6/Vegeta scripts and read outputs.
+* Define provisional targets: success ≥ 99%, P95 budgets, max error burst, etc.
 
 **Accept when**
-Doc is copy-paste runnable and unambiguous.
+
+* Copy-paste runnable and unambiguous.
 
 **Plain English**
 
-> A single page that says what “good” looks like and how to check it.
+> One page that says what “good” looks like and how to check it.
 
 **LLM priming**
-`SLO`, `error budget`, `P95`, `k6 thresholds`, `vegeta report` ([Google SRE][10])
+`SLO`, `error budget`, `P95`, `k6 thresholds`, `vegeta report`
 
 ---
 
-## Ticket-417 — MVP runbook (ops)
+## Ticket-415 — MVP runbook (ops)
 
 **What / Why**
-Create an **MVP runbook**: start/stop, common errors, where logs/traces go, and how to interpret JSON-RPC error codes (spec references). ([jsonrpc.org][2])
+Create an **MVP runbook**: start/stop, common errors, logs/traces locations, JSON-RPC error code interpretations.
 
 **Where**
-`/runbooks/mvp_runbook.md`, `README.md` (“Testing” section updated)
+`/runbooks/mvp_runbook.md`, `README.md` (Testing section updated)
 
 **Implementation sketch**
 
-* Include curl examples, common HTTP→JSON-RPC mappings, and a “what to check first” flow.
+* Curl examples, HTTP→JSON-RPC mappings, “what to check first” flow.
 
 **Accept when**
-Runbook is actionable for on-call.
+
+* On-call actionable.
 
 **Plain English**
 
 > If something breaks at 2 a.m., this tells us what to do.
 
 **LLM priming**
-`runbook`, `on-call`, `first 5 minutes checks`, `json-rpc error codes table` ([jsonrpc.org][2])
+`runbook`, `on-call`, `first 5 minutes checks`, `json-rpc error codes table`
 
 ---
 
@@ -470,34 +440,16 @@ Runbook is actionable for on-call.
 # Unit/integration contracts
 npm run test -- tests/sprint4
 
-# k6 smoke (requires k6 installed)
-k6 run tests/sprint4/k6/list_smoke.js
-k6 run tests/sprint4/k6/call_smoke.js
+# k6 smoke (two scenarios in one script)
+k6 run tests/sprint4/k6/smoke_scenarios.js
 
-# Vegeta constant-rate probe (requires vegeta)
+# Vegeta constant-rate probe
 bash tests/sprint4/vegeta/run_const_rate.sh
 
-# Chaos drills (requires docker + tc netem; run carefully)
+# Chaos drills (docker + tc netem; run carefully)
 bash tests/sprint4/chaos/jungle_restart.sh
 bash tests/sprint4/chaos/netem_latency.sh
 bash tests/sprint4/chaos/netem_loss.sh
 ```
 
----
-
-### Why these priming cues work
-
-They mirror **exact tool and API names** that show up in strong training examples: Supertest contracts, JSON-RPC codes, **k6** script primitives (`http.post`, `checks`, `thresholds`), **Vegeta** CLI (`attack`, `report`), OTel Node SDK span APIs, and jitter backoff patterns from widely cited docs. That nudges a decoder-only model toward **idiomatic, testable** outputs aligned with **MCP + JSON-RPC** realities. ([Grafana Labs][3])
-
-If you want, I can split these into **per-ticket Markdown files** and generate empty test stubs (incl. k6/Vegeta/chaos scripts) so several Sprint-4 tickets go green immediately.
-
-[1]: https://modelcontextprotocol.io/docs/concepts/tools?utm_source=chatgpt.com "Tools"
-[2]: https://www.jsonrpc.org/specification?utm_source=chatgpt.com "JSON-RPC 2.0 Specification"
-[3]: https://grafana.com/docs/k6/latest/?utm_source=chatgpt.com "Grafana k6 documentation"
-[4]: https://opentelemetry.io/docs/languages/js/getting-started/nodejs/?utm_source=chatgpt.com "Node.js"
-[5]: https://aws.amazon.com/builders-library/timeouts-retries-and-backoff-with-jitter/?utm_source=chatgpt.com "Timeouts, retries and backoff with jitter"
-[6]: https://www.gremlin.com/chaos-monkey?utm_source=chatgpt.com "Chaos Monkey Guide for Engineers - Gremlin"
-[7]: https://sre.google/sre-book/evolving-sre-engagement-model/?utm_source=chatgpt.com "Production Readiness Review: Engagement Insight"
-[8]: https://openai.github.io/openai-agents-python/mcp/?utm_source=chatgpt.com "Model context protocol (MCP) - OpenAI Agents SDK"
-[9]: https://github.com/tsenart/vegeta?utm_source=chatgpt.com "tsenart/vegeta: HTTP load testing tool and library. It's over ..."
-[10]: https://sre.google/sre-book/launch-checklist/?utm_source=chatgpt.com "Appendix E. Launch Coordination Checklist"
+If you want, I can drop in tiny file skeletons for each ticket (headers + TODOs + example asserts) to reduce LLM round-trips further.
