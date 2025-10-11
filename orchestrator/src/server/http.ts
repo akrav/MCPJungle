@@ -6,6 +6,8 @@ import { InvalidRequest, ServerError } from '../jsonrpc/errors';
 import type { JsonRpcSuccess } from '../jsonrpc/types';
 import { loadConfig } from '../config/load';
 import { fetch } from 'undici';
+import { Readable } from 'node:stream';
+import type { ReadableStream as WebReadableStream } from 'stream/web';
 
 const app = express();
 app.use(helmet());
@@ -23,11 +25,12 @@ app.post('/mcp', async (req, res) => {
     return res.json(InvalidRequest(null));
   }
   if (!isJsonRpcObject(body)) {
-    // attempt to grab potential id if present
-    const id =
-      body && typeof body === 'object' && 'id' in body
-        ? ((body as Record<string, unknown>).id ?? null)
-        : null;
+    // attempt to grab potential id if present and narrow it to string|number|null
+    let id: string | number | null = null;
+    if (body && typeof body === 'object' && 'id' in body) {
+      const raw = (body as Record<string, unknown>).id;
+      id = typeof raw === 'string' || typeof raw === 'number' ? raw : null;
+    }
     return res.json(InvalidRequest(id));
   }
 
@@ -44,6 +47,26 @@ app.post('/mcp', async (req, res) => {
     return res.json(resp);
   }
 
+  // Minimal cancel relay: forward cancel as-is
+  if (body.method === 'cancel') {
+    const cfg = loadConfig(process.env);
+    try {
+      const upstream = await fetch(`${cfg.jungleUrl}/mcp`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const text = await upstream.text();
+      try {
+        return res.json(JSON.parse(text));
+      } catch {
+        return res.json(ServerError(id, upstream.status));
+      }
+    } catch {
+      return res.json(ServerError(id));
+    }
+  }
+
   // Happy-path proxy: forward JSON-RPC body to Jungle and relay response
   const cfg = loadConfig(process.env);
   try {
@@ -52,10 +75,19 @@ app.post('/mcp', async (req, res) => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
-    const proxyBody = await upstream.text();
-    // Try to relay JSON as-is; fall back to server error on parse issues
+    // Stream response if possible for progress relay
+    if (upstream.body) {
+      res.setHeader(
+        'Content-Type',
+        upstream.headers.get('content-type') ?? 'application/json',
+      );
+      Readable.fromWeb(upstream.body as WebReadableStream).pipe(res);
+      return;
+    }
+    // Fallback: parse as JSON and return
+    const text = await upstream.text();
     try {
-      return res.json(JSON.parse(proxyBody));
+      return res.json(JSON.parse(text));
     } catch {
       return res.json(ServerError(id, upstream.status));
     }
