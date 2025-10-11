@@ -30,22 +30,22 @@ Conventions:
 - Only pause on the defined stop conditions above.
 
 
-Git: commit and push on mcp_orchestrator After Completion of any Ticket (only after tests are green)
+Git: commit and push on Epic_1_mcp_orchestrator_pass_through After Completion of any Ticket (only after tests are green)
 
-- Ensure we are on mcp_orchestrator (create/switch if needed)
+- Ensure we are on Epic_1_mcp_orchestrator_pass_through (create/switch if needed)
 - If there are changes, commit and push
 
 Commands:
 ```bash
 # ensure branch
-git checkout -B mcp_orchestrator
+git checkout -B Epic_1_mcp_orchestrator_pass_through
 
 # commit only if there are changes
 if ! git diff --quiet || ! git diff --cached --quiet; then
   git add -A
   git commit -m "feat: TICKET-${ticketId} complete (tests green)"
-  git pull --rebase origin mcp_orchestrator || true
-  git push -u origin mcp_orchestrator
+  git pull --rebase origin Epic_1_mcp_orchestrator_pass_through || true
+  git push -u origin Epic_1_mcp_orchestrator_pass_through
 fi
 ```
 
