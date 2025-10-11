@@ -8,6 +8,8 @@ export function loadConfig(
     PORT: env.PORT,
     BIND: env.BIND ?? '127.0.0.1',
     LOG_LEVEL: env.LOG_LEVEL ?? 'info',
+    JUNGLE_TOKEN: env.JUNGLE_TOKEN,
+    ORCH_UPSTREAM_TIMEOUT_MS: env.ORCH_UPSTREAM_TIMEOUT_MS,
   });
   if (!parsed.success) {
     const msg = parsed.error.issues
@@ -21,5 +23,7 @@ export function loadConfig(
     port: data.PORT,
     bind: data.BIND,
     logLevel: data.LOG_LEVEL,
+    jungleToken: data.JUNGLE_TOKEN,
+    upstreamTimeoutMs: data.ORCH_UPSTREAM_TIMEOUT_MS,
   };
 }

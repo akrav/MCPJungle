@@ -12,6 +12,12 @@ export const configSchema = z.object({
     .string()
     .optional()
     .transform((v) => v || 'info'),
+  JUNGLE_TOKEN: z.string().optional(),
+  ORCH_UPSTREAM_TIMEOUT_MS: z
+    .string()
+    .optional()
+    .transform((v) => (v && v.trim() !== '' ? parseInt(v, 10) : 30000))
+    .pipe(z.number().int().positive()),
 });
 
 export type OrchestratorConfig = {
@@ -19,4 +25,6 @@ export type OrchestratorConfig = {
   port: number;
   bind: string;
   logLevel: string;
+  jungleToken?: string;
+  upstreamTimeoutMs: number;
 };

@@ -21,6 +21,11 @@ app.get('/mcp', (_req, res) => res.sendStatus(405));
 // Minimal /mcp POST bootstrap: reject arrays, accept single object
 app.post('/mcp', async (req, res) => {
   const body = req.body;
+  // Content-Type guard: only JSON is accepted
+  const ctype = req.headers['content-type'] || '';
+  if (typeof ctype !== 'string' || !ctype.startsWith('application/json')) {
+    return res.json(InvalidRequest(null));
+  }
   if (Array.isArray(body)) {
     return res.json(InvalidRequest(null));
   }
@@ -70,11 +75,26 @@ app.post('/mcp', async (req, res) => {
   // Happy-path proxy: forward JSON-RPC body to Jungle and relay response
   const cfg = loadConfig(process.env);
   try {
-    const upstream = await fetch(`${cfg.jungleUrl}/mcp`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
+    const upstream = await fetchWithRetry(
+      `${cfg.jungleUrl}/mcp`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(cfg.jungleToken
+            ? { Authorization: `Bearer ${cfg.jungleToken}` }
+            : {}),
+          'User-Agent': 'orchestrator/1.0',
+          Forwarded: `proto=http`,
+          ...(req.headers['x-user-id']
+            ? { 'x-user-id': String(req.headers['x-user-id']) }
+            : {}),
+        },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(cfg.upstreamTimeoutMs),
+      },
+      { retries: 2, baseMs: 50 },
+    );
     // Stream response if possible for progress relay
     if (upstream.body) {
       res.setHeader(
@@ -95,5 +115,21 @@ app.post('/mcp', async (req, res) => {
     return res.json(ServerError(id));
   }
 });
+
+type RetryConfig = { retries: number; baseMs: number };
+type FetchInit = Parameters<typeof fetch>[1];
+async function fetchWithRetry(url: string, init: FetchInit, cfg: RetryConfig) {
+  let attempt = 0;
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    const res = await fetch(url, init);
+    if (res.status !== 502 && res.status !== 503) return res;
+    if (attempt >= cfg.retries) return res;
+    attempt++;
+    const jitter = Math.random() * cfg.baseMs;
+    const delay = cfg.baseMs * Math.pow(2, attempt - 1) + jitter;
+    await new Promise((r) => setTimeout(r, delay));
+  }
+}
 
 export default app;
