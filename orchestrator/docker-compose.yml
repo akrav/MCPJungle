@@ -5,6 +5,15 @@ services:
     ports:
       - "8080:8080"
     environment:
-      - JUNGLE_URL=http://localhost:8080
+      - JUNGLE_URL=http://jungle:9000
+    depends_on:
+      - jungle
+
+  jungle:
+    image: mcpjungle/mcpjungle:latest-stdio
+    environment:
+      - SERVER_MODE=development
+    ports:
+      - "9000:9000"
 
 
