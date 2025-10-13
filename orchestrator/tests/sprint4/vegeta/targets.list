@@ -1,0 +1,7 @@
+*** Begin Patch
+*** Add File: orchestrator/tests/sprint4/vegeta/targets.list
+POST http://localhost:8080/mcp
+Content-Type: application/json
+
+{"jsonrpc":"2.0","id":1,"method":"initialize"}
+*** End Patch
