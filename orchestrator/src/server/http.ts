@@ -1,7 +1,11 @@
 import express from 'express';
 import helmet from 'helmet';
 import { healthz } from '../health/healthz';
+import { bearerAuth } from '../auth/bearer';
+import { authorizeMethods } from '../auth/authorize';
 import { isJsonRpcObject } from '../jsonrpc/validate';
+import { applyHelmet } from '../security/helmet';
+import { enforceJsonAndSize } from '../security/limits';
 import { InvalidRequest, ServerError } from '../jsonrpc/errors';
 import type { JsonRpcSuccess } from '../jsonrpc/types';
 import { loadConfig } from '../config/load';
@@ -10,8 +14,9 @@ import { Readable } from 'node:stream';
 import type { ReadableStream as WebReadableStream } from 'stream/web';
 
 const app = express();
-app.use(helmet());
+app.use(applyHelmet());
 app.use(express.json({ limit: '1mb' }));
+app.use(bearerAuth());
 
 app.get('/healthz', healthz);
 
@@ -19,7 +24,7 @@ app.get('/healthz', healthz);
 app.get('/mcp', (_req, res) => res.sendStatus(405));
 
 // Minimal /mcp POST bootstrap: reject arrays, accept single object
-app.post('/mcp', async (req, res) => {
+app.post('/mcp', enforceJsonAndSize(1_000_000), authorizeMethods(), async (req, res) => {
   const body = req.body;
   // Content-Type guard: only JSON is accepted
   const ctype = req.headers['content-type'] || '';
