@@ -23,10 +23,12 @@ export function log(
   message: string,
   fields?: Record<string, unknown>,
 ) {
+  const traceIds = getTraceIds();
   const base = {
     level,
     msg: message,
     ts: new Date().toISOString(),
+    ...(traceIds ? traceIds : {}),
   } as Record<string, unknown>;
 
   const redacted = fields
@@ -36,4 +38,16 @@ export function log(
 
   // eslint-disable-next-line no-console
   console.log(JSON.stringify(payload));
+}
+
+function getTraceIds(): { trace_id: string; span_id: string } | null {
+  try {
+    // dynamic import to avoid hard dependency
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const ot = require('@opentelemetry/api');
+    const span = ot.trace.getSpan(ot.context.active());
+    const sc = span?.spanContext();
+    if (sc && sc.traceId && sc.spanId) return { trace_id: sc.traceId, span_id: sc.spanId };
+  } catch {}
+  return null;
 }

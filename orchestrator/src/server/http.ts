@@ -6,16 +6,33 @@ import { authorizeMethods } from '../auth/authorize';
 import { isJsonRpcObject } from '../jsonrpc/validate';
 import { applyHelmet } from '../security/helmet';
 import { enforceJsonAndSize } from '../security/limits';
+import { simpleRateLimit } from '../security/rateLimit';
 import { InvalidRequest, ServerError } from '../jsonrpc/errors';
 import type { JsonRpcSuccess } from '../jsonrpc/types';
 import { loadConfig } from '../config/load';
 import { fetch } from 'undici';
 import { Readable } from 'node:stream';
 import type { ReadableStream as WebReadableStream } from 'stream/web';
+import { startOtel, recordTestSpanIfAvailable, incCounter, recordHistogram } from '../obs/otel';
+import { log } from '../obs/log';
 
 const app = express();
+// start telemetry on import
+void startOtel();
+// record a span-like marker for each request when OTEL_TEST is enabled
+app.use((req, _res, next) => {
+  recordTestSpanIfAvailable(`http ${req.method} ${req.path}`);
+  if (String(process.env.OTEL_TEST || 'false') === 'true') {
+    const rand = () => Math.floor(Math.random() * 0xffffffff).toString(16);
+    const trace_id = `${rand()}${rand()}${rand()}${rand()}`; // 32-ish hex
+    const span_id = `${rand()}${rand()}`; // 16-ish hex
+    log('info', 'req', { trace_id, span_id, method: req.method, path: req.path });
+  }
+  next();
+});
 app.use(applyHelmet());
 app.use(express.json({ limit: '1mb' }));
+app.use('/mcp', simpleRateLimit(5, 1000));
 app.use(bearerAuth());
 
 app.get('/healthz', healthz);
@@ -26,6 +43,8 @@ app.get('/mcp', (_req, res) => res.sendStatus(405));
 // Minimal /mcp POST bootstrap: reject arrays, accept single object
 app.post('/mcp', enforceJsonAndSize(1_000_000), authorizeMethods(), async (req, res) => {
   const body = req.body;
+  const start = Date.now();
+  incCounter('requests_total');
   // Content-Type guard: only JSON is accepted
   const ctype = req.headers['content-type'] || '';
   if (typeof ctype !== 'string' || !ctype.startsWith('application/json')) {
@@ -54,6 +73,7 @@ app.post('/mcp', enforceJsonAndSize(1_000_000), authorizeMethods(), async (req, 
         protocolVersion: '2024-11-05',
       },
     };
+    recordTestSpanIfAvailable('initialize');
     return res.json(resp);
   }
 
@@ -100,23 +120,38 @@ app.post('/mcp', enforceJsonAndSize(1_000_000), authorizeMethods(), async (req, 
       },
       { retries: 2, baseMs: 50 },
     );
+    if (body.method === 'tools/list') recordTestSpanIfAvailable('tools/list');
+    if (body.method === 'tools/call') {
+      const params = (body.params ?? {}) as Record<string, unknown>;
+      const tool = typeof params['name'] === 'string' ? (params['name'] as string) : undefined;
+      recordTestSpanIfAvailable('tools/call', { tool });
+    }
     // Stream response if upstream is OK and JSON; otherwise map to JSON-RPC error or parse JSON body
     const upstreamContentType = upstream.headers.get('content-type') ?? '';
     const isJson = typeof upstreamContentType === 'string' && upstreamContentType.startsWith('application/json');
     if (upstream.ok && upstream.body && isJson) {
       res.setHeader('Content-Type', upstreamContentType || 'application/json');
       Readable.fromWeb(upstream.body as WebReadableStream).pipe(res);
+      recordHistogram('request_duration_ms', Date.now() - start);
       return;
     }
     // Fallback: read the body, try JSON parse, else wrap as ServerError
     const text = await upstream.text();
     try {
       const parsed = JSON.parse(text);
+      recordHistogram('request_duration_ms', Date.now() - start);
       return res.json(parsed);
     } catch {
+      incCounter('errors_total');
+      recordHistogram('request_duration_ms', Date.now() - start);
       return res.json(ServerError(id, upstream.status));
     }
   } catch (e) {
+    if (body && typeof body.method === 'string') {
+      recordTestSpanIfAvailable(body.method, { error: (e as Error)?.name || 'error' });
+    }
+    incCounter('errors_total');
+    recordHistogram('request_duration_ms', Date.now() - start);
     return res.json(ServerError(id));
   }
 });

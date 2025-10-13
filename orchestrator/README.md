@@ -27,4 +27,9 @@ Sprint 1 notes
 - Retry: 2x on 502/503 with backoff+jitter
 - Header hygiene: `User-Agent`, `Forwarded`, optional `Authorization`
 
+Security (TLS/mTLS)
+- Terminate TLS at your ingress (NGINX/Envoy/Cloud LB) and forward to orchestrator over HTTP inside the cluster.
+- Prefer a service mesh (e.g., Istio/Linkerd) or mTLS between internal services for transport security.
+- Keep bearer tokens and secrets in headers; logs are redacted. Avoid PII in URLs.
+
 
