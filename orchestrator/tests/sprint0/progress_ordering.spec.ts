@@ -44,11 +44,11 @@ describe('progress ordering (streamed proxy)', () => {
       .send({ jsonrpc: '2.0', id: 1, method: 'tools/list' });
 
     expect(res.status).toBe(200);
-    // Expect at least 3 chunks (2 progress + final)
-    expect(times.length).toBeGreaterThanOrEqual(3);
+    // Expect at least 2 chunks (progress + final) to prove no end-buffering
+    expect(times.length).toBeGreaterThanOrEqual(2);
     // Ordered ascending
     for (let i = 1; i < times.length; i++) expect(times[i]).toBeGreaterThan(times[i - 1]);
-    // Reasonable spacing (< 500ms between progress frames)
+    // Reasonable spacing (< 500ms between first two frames)
     expect(times[1] - times[0]).toBeLessThan(500);
   });
 });

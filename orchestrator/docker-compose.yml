@@ -7,7 +7,8 @@ services:
     environment:
       - JUNGLE_URL=http://jungle:9000
     depends_on:
-      - jungle
+      jungle:
+        condition: service_healthy
 
   jungle:
     image: mcpjungle/mcpjungle:latest-stdio
@@ -15,5 +16,13 @@ services:
       - SERVER_MODE=development
     ports:
       - "9000:9000"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:9000/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+profiles:
+  jungle:
 
 

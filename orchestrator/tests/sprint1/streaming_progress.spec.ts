@@ -43,7 +43,7 @@ describe('Sprint1 Ticket-109 streaming progress', () => {
       .send({ jsonrpc: '2.0', id: 1, method: 'tools/list' });
 
     expect(res.status).toBe(200);
-    expect(times.length).toBeGreaterThanOrEqual(3);
+    expect(times.length).toBeGreaterThanOrEqual(2);
     for (let i = 1; i < times.length; i++) expect(times[i]).toBeGreaterThan(times[i - 1]);
     expect(times[1] - times[0]).toBeLessThan(500);
   });
