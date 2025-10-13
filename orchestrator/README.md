@@ -15,6 +15,16 @@ curl -s -H 'Content-Type: application/json' \
   http://localhost:8080/mcp
 ```
 
+Compose Quickstart (copy-paste)
+```
+cp deploy/compose.env.example .env || true
+docker compose up -d
+curl -s http://localhost:8080/healthz
+curl -s -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize"}' \
+  http://localhost:8080/mcp
+```
+
 Notes
 - GET /mcp is rejected (405); POST only.
 - Array bodies to /mcp are rejected (-32600).
