@@ -3,12 +3,13 @@
 # The mcpjungle server runs in development mode.
 services:
   db:
-    image: postgres:latest
+    image: postgres:16-alpine
     container_name: mcpjungle-db
     environment:
       POSTGRES_USER: mcpjungle
       POSTGRES_PASSWORD: mcpjungle
       POSTGRES_DB: mcpjungle
+      PGDATA: /var/lib/postgresql/data
     ports:
       - "5432:5432"
     volumes:

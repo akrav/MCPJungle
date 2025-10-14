@@ -1,5 +1,5 @@
 import type { Request, Response, NextFunction } from 'express';
-import { InvalidRequest } from '../jsonrpc/errors';
+import { InvalidRequest } from '../jsonrpc/errors.js';
 
 export function enforceJsonAndSize(limitBytes: number = 1_000_000) {
   return function (req: Request, res: Response, next: NextFunction) {

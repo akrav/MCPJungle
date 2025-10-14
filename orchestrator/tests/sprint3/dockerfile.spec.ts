@@ -8,6 +8,7 @@ describe('Sprint3 Ticket-302 Dockerfile basics', () => {
     expect(s).toMatch(/FROM node:20-alpine AS builder/);
     expect(s).toMatch(/HEALTHCHECK/);
     expect(s).toMatch(/USER node/);
+    expect(s).toMatch(/CMD \["node","dist\/server\/dev\.js"\]/);
   });
 });
 

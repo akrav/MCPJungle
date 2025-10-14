@@ -1,22 +1,25 @@
 import express from 'express';
 import helmet from 'helmet';
-import { healthz } from '../health/healthz';
-import { bearerAuth } from '../auth/bearer';
-import { authorizeMethods } from '../auth/authorize';
-import { isJsonRpcObject } from '../jsonrpc/validate';
-import { applyHelmet } from '../security/helmet';
-import { enforceJsonAndSize } from '../security/limits';
-import { simpleRateLimit } from '../security/rateLimit';
-import { InvalidRequest, ServerError } from '../jsonrpc/errors';
-import type { JsonRpcSuccess } from '../jsonrpc/types';
-import { loadConfig } from '../config/load';
+import { healthz } from '../health/healthz.js';
+import { bearerAuth } from '../auth/bearer.js';
+import { authorizeMethods } from '../auth/authorize.js';
+import { isJsonRpcObject } from '../jsonrpc/validate.js';
+import { applyHelmet } from '../security/helmet.js';
+import { enforceJsonAndSize } from '../security/limits.js';
+import { simpleRateLimit } from '../security/rateLimit.js';
+import { InvalidRequest, ServerError } from '../jsonrpc/errors.js';
+import type { JsonRpcSuccess } from '../jsonrpc/types.js';
+import { loadConfig } from '../config/load.js';
 import { fetch } from 'undici';
 import { Readable } from 'node:stream';
 import type { ReadableStream as WebReadableStream } from 'stream/web';
-import { startOtel, recordTestSpanIfAvailable, incCounter, recordHistogram } from '../obs/otel';
-import { log } from '../obs/log';
+import { startOtel, recordTestSpanIfAvailable, incCounter, recordHistogram } from '../obs/otel.js';
+import { log } from '../obs/log.js';
+import type { Request } from 'express';
 
 const app = express();
+let upstreamSessionCache: string | null = null;
+
 // start telemetry on import
 void startOtel();
 // record a span-like marker for each request when OTEL_TEST is enabled
@@ -39,6 +42,30 @@ app.get('/healthz', healthz);
 
 // Explicitly reject GET on /mcp per bootstrap contract
 app.get('/mcp', (_req, res) => res.sendStatus(405));
+
+async function createUpstreamSession(req: Request, initId: string | number | null): Promise<string | null> {
+  const cfg = loadConfig(process.env);
+  try {
+    const upstream = await fetch(`${cfg.jungleUrl}/mcp`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json, text/event-stream',
+        ...(cfg.jungleToken ? { Authorization: `Bearer ${cfg.jungleToken}` } : {}),
+        'User-Agent': 'orchestrator/1.0',
+        Forwarded: `proto=http`,
+        ...(req.headers['x-user-id'] ? { 'x-user-id': String(req.headers['x-user-id']) } : {}),
+      },
+      body: JSON.stringify({ jsonrpc: '2.0', id: initId ?? 0, method: 'initialize' }),
+      signal: AbortSignal.timeout(cfg.upstreamTimeoutMs),
+    });
+    const s = upstream.headers.get('mcp-session-id');
+    upstreamSessionCache = s && s.trim() !== '' ? s : upstreamSessionCache;
+    return upstreamSessionCache;
+  } catch {
+    return null;
+  }
+}
 
 // Minimal /mcp POST bootstrap: reject arrays, accept single object
 app.post('/mcp', enforceJsonAndSize(1_000_000), authorizeMethods(), async (req, res) => {
@@ -64,17 +91,36 @@ app.post('/mcp', enforceJsonAndSize(1_000_000), authorizeMethods(), async (req, 
   }
 
   const id = body.id ?? null;
+
   if (body.method === 'initialize') {
-    const resp: JsonRpcSuccess = {
-      jsonrpc: '2.0',
-      id,
-      result: {
-        server: { name: 'orchestrator', version: '0.1.0' },
-        protocolVersion: '2024-11-05',
-      },
-    };
-    recordTestSpanIfAvailable('initialize');
-    return res.json(resp);
+    const cfg = loadConfig(process.env);
+    try {
+      const upstream = await fetch(`${cfg.jungleUrl}/mcp`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json, text/event-stream',
+          ...(cfg.jungleToken ? { Authorization: `Bearer ${cfg.jungleToken}` } : {}),
+          'User-Agent': 'orchestrator/1.0',
+          Forwarded: `proto=http`,
+          ...(req.headers['x-user-id'] ? { 'x-user-id': String(req.headers['x-user-id']) } : {}),
+        },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(cfg.upstreamTimeoutMs),
+      });
+      const upstreamSession = upstream.headers.get('mcp-session-id');
+      if (upstreamSession) upstreamSessionCache = upstreamSession;
+      if (upstreamSessionCache) res.setHeader('Mcp-Session-Id', upstreamSessionCache);
+      const text = await upstream.text();
+      try {
+        recordTestSpanIfAvailable('initialize');
+        return res.json(JSON.parse(text));
+      } catch {
+        return res.json(ServerError(id, upstream.status));
+      }
+    } catch {
+      return res.json(ServerError(id));
+    }
   }
 
   // Minimal cancel relay: forward cancel as-is
@@ -83,7 +129,12 @@ app.post('/mcp', enforceJsonAndSize(1_000_000), authorizeMethods(), async (req, 
     try {
       const upstream = await fetch(`${cfg.jungleUrl}/mcp`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json, text/event-stream',
+          ...(req.headers['mcp-session-id'] ? { 'Mcp-Session-Id': String(req.headers['mcp-session-id']) } : {}),
+          ...(upstreamSessionCache ? { 'Mcp-Session-Id': upstreamSessionCache } : {}),
+        },
         body: JSON.stringify(body),
       });
       const text = await upstream.text();
@@ -97,45 +148,76 @@ app.post('/mcp', enforceJsonAndSize(1_000_000), authorizeMethods(), async (req, 
     }
   }
 
-  // Happy-path proxy: forward JSON-RPC body to Jungle and relay response
+  // Proxy: ensure upstream session, forward JSON-RPC body to Jungle and relay response
   const cfg = loadConfig(process.env);
   try {
-    const upstream = await fetchWithRetry(
+    if (!upstreamSessionCache) await createUpstreamSession(req, id);
+    const sessionHeader = req.headers['mcp-session-id'];
+    const sessionToUse = typeof sessionHeader === 'string' && sessionHeader.trim() !== '' ? sessionHeader : upstreamSessionCache || undefined;
+
+    let upstream = await fetchWithRetry(
       `${cfg.jungleUrl}/mcp`,
       {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          ...(cfg.jungleToken
-            ? { Authorization: `Bearer ${cfg.jungleToken}` }
-            : {}),
+          Accept: 'application/json, text/event-stream',
+          ...(cfg.jungleToken ? { Authorization: `Bearer ${cfg.jungleToken}` } : {}),
           'User-Agent': 'orchestrator/1.0',
           Forwarded: `proto=http`,
-          ...(req.headers['x-user-id']
-            ? { 'x-user-id': String(req.headers['x-user-id']) }
-            : {}),
+          ...(req.headers['x-user-id'] ? { 'x-user-id': String(req.headers['x-user-id']) } : {}),
+          ...(sessionToUse ? { 'Mcp-Session-Id': sessionToUse } : {}),
         },
         body: JSON.stringify(body),
         signal: AbortSignal.timeout(cfg.upstreamTimeoutMs),
       },
       { retries: 2, baseMs: 50 },
     );
+
+    // If 400, refresh session once and retry
+    if (upstream.status === 400) {
+      await createUpstreamSession(req, id);
+      if (upstreamSessionCache) {
+        upstream = await fetchWithRetry(
+          `${cfg.jungleUrl}/mcp`,
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Accept: 'application/json, text/event-stream',
+              ...(cfg.jungleToken ? { Authorization: `Bearer ${cfg.jungleToken}` } : {}),
+              'User-Agent': 'orchestrator/1.0',
+              Forwarded: `proto=http`,
+              ...(req.headers['x-user-id'] ? { 'x-user-id': String(req.headers['x-user-id']) } : {}),
+              'Mcp-Session-Id': upstreamSessionCache,
+            },
+            body: JSON.stringify(body),
+            signal: AbortSignal.timeout(cfg.upstreamTimeoutMs),
+          },
+          { retries: 1, baseMs: 50 },
+        );
+        res.setHeader('Mcp-Session-Id', upstreamSessionCache);
+      }
+    }
+
     if (body.method === 'tools/list') recordTestSpanIfAvailable('tools/list');
     if (body.method === 'tools/call') {
       const params = (body.params ?? {}) as Record<string, unknown>;
       const tool = typeof params['name'] === 'string' ? (params['name'] as string) : undefined;
       recordTestSpanIfAvailable('tools/call', { tool });
     }
-    // Stream response if upstream is OK and JSON; otherwise map to JSON-RPC error or parse JSON body
     const upstreamContentType = upstream.headers.get('content-type') ?? '';
     const isJson = typeof upstreamContentType === 'string' && upstreamContentType.startsWith('application/json');
+    const reflectedSession = upstream.headers.get('mcp-session-id');
+    if (reflectedSession) upstreamSessionCache = reflectedSession;
+    if (upstreamSessionCache) res.setHeader('Mcp-Session-Id', upstreamSessionCache);
+
     if (upstream.ok && upstream.body && isJson) {
       res.setHeader('Content-Type', upstreamContentType || 'application/json');
       Readable.fromWeb(upstream.body as WebReadableStream).pipe(res);
       recordHistogram('request_duration_ms', Date.now() - start);
       return;
     }
-    // Fallback: read the body, try JSON parse, else wrap as ServerError
     const text = await upstream.text();
     try {
       const parsed = JSON.parse(text);

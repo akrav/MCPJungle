@@ -1,5 +1,5 @@
 import type { Request, Response, NextFunction } from 'express';
-import { MethodNotFound } from '../jsonrpc/errors';
+import { MethodNotFound } from '../jsonrpc/errors.js';
 
 const allowed = new Set(['initialize', 'tools/list', 'tools/call', 'cancel']);
 

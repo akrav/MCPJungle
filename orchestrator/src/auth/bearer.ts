@@ -1,5 +1,5 @@
 import type { Request, Response, NextFunction } from 'express';
-import { ServerError } from '../jsonrpc/errors';
+import { ServerError } from '../jsonrpc/errors.js';
 
 function parseBearer(authorization: string | undefined): string | null {
   if (!authorization) return null;

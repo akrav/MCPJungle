@@ -10,5 +10,5 @@
     "skipLibCheck": true,
     "types": ["node", "vitest", "supertest"]
   },
-  "include": ["src", "tests", "tests/**/*.ts"]
+  "include": ["src", "tests", "tests/**/*.ts", "src/obs/otel-vendor.d.ts"]
 }

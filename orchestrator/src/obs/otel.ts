@@ -13,41 +13,34 @@ let testExporter: InMemoryLikeExporter | null = null;
 export async function startOtel(): Promise<void> {
   if (started) return;
   const useTest = String(process.env.OTEL_TEST || 'false') === 'true';
-  try {
-    // Dynamically import to avoid hard dependency during local tests without network
-    const [{ NodeSDK }, { OTLPTraceExporter }, { Resource }, { SemanticResourceAttributes }, { getNodeAutoInstrumentations }] = await Promise.all([
-      import('@opentelemetry/sdk-node'),
-      import('@opentelemetry/exporter-trace-otlp-http'),
-      import('@opentelemetry/resources'),
-      import('@opentelemetry/semantic-conventions'),
-      import('@opentelemetry/auto-instrumentations-node'),
-    ]);
+  // Fallback: mark as started in test mode with an in-memory buffer
+  if (useTest) {
+    testMode = true;
+    testExporter = { getFinishedSpans: () => testFinishedSpans };
+    started = true;
+    return;
+  }
 
-    const resource = new Resource({ [SemanticResourceAttributes.SERVICE_NAME]: 'orchestrator' });
-    if (useTest) {
-      // In CI tests, we only need that start succeeds; we still maintain a local span buffer
-      testMode = true;
-      testExporter = { getFinishedSpans: () => testFinishedSpans };
-      const sdk = new NodeSDK({ resource, instrumentations: [getNodeAutoInstrumentations()] });
-      await sdk.start();
-      started = true;
-    } else {
+  // Production path: enable when explicitly requested
+  if (String(process.env.OTEL_ENABLE_VENDOR || 'false') === 'true') {
+    try {
+      // Dynamically import vendor SDKs; optionalDependencies avoid hard CI pinning
+      const [{ NodeSDK }, { OTLPTraceExporter }, { Resource }, { SemanticResourceAttributes }, { getNodeAutoInstrumentations }] = await Promise.all([
+        import('@opentelemetry/sdk-node'),
+        import('@opentelemetry/exporter-trace-otlp-http'),
+        import('@opentelemetry/resources'),
+        import('@opentelemetry/semantic-conventions'),
+        import('@opentelemetry/auto-instrumentations-node'),
+      ]);
+      const resource = new Resource({ [SemanticResourceAttributes.SERVICE_NAME]: 'orchestrator' });
       const endpoint = process.env.OTEL_EXPORTER_OTLP_ENDPOINT || 'http://localhost:4318';
       const traceExporter = new OTLPTraceExporter({ url: `${endpoint}/v1/traces` });
-      const sdk = new NodeSDK({
-        resource,
-        traceExporter,
-        instrumentations: [getNodeAutoInstrumentations()],
-      });
+      const sdk = new NodeSDK({ resource, traceExporter, instrumentations: [getNodeAutoInstrumentations()] });
       await sdk.start();
       started = true;
-    }
-  } catch {
-    // Fallback: mark as started in test mode with an in-memory buffer
-    if (useTest) {
-      testMode = true;
-      testExporter = { getFinishedSpans: () => testFinishedSpans };
-      started = true;
+      return;
+    } catch {
+      // If vendor libs are unavailable, fall through to no-op
     }
   }
 }

@@ -1,4 +1,4 @@
-import { configSchema, OrchestratorConfig } from './schema';
+import { configSchema, OrchestratorConfig } from './schema.js';
 
 export function loadConfig(
   env: NodeJS.ProcessEnv = process.env,

@@ -4,7 +4,7 @@ services:
     ports:
       - "${ORCH_HOST_PORT:-8080}:8080"
     environment:
-      - JUNGLE_URL=http://jungle:9000
+      - JUNGLE_URL=http://jungle:9001
       - BIND=0.0.0.0
     depends_on:
       jungle:
@@ -14,11 +14,11 @@ services:
     image: mcpjungle/mcpjungle:latest-stdio
     environment:
       - SERVER_MODE=development
-      - PORT=9000
+      - PORT=9001
     ports:
-      - "9000:9000"
+      - "9001:9001"
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:9000/health || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9001/health || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 3

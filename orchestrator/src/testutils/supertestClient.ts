@@ -1,5 +1,5 @@
 import request from 'supertest';
-import app from '../server/http';
+import app from '../server/http.js';
 
 export function authed() {
   const agent = request(app);

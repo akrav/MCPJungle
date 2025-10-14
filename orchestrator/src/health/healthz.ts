@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { loadConfig } from '../config/load';
+import { loadConfig } from '../config/load.js';
 
 const VERSION = '0.1.0';
 
