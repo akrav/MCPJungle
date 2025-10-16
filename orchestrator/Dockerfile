@@ -13,6 +13,6 @@ COPY --from=builder /app/dist ./dist
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 CMD wget -qO- http://localhost:8080/healthz || exit 1
 USER node
-CMD ["node","--experimental-specifier-resolution=node","dist/src/server/dev.js"]
+CMD ["node","dist/server/dev.js"]
 
 
