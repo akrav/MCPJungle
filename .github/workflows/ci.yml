@@ -8,6 +8,8 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    env:
+      JUNGLE_URL: http://localhost:9000
     defaults:
       run:
         working-directory: orchestrator

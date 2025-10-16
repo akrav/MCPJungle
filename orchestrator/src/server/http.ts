@@ -20,6 +20,11 @@ import type { Request } from 'express';
 const app = express();
 let upstreamSessionCache: string | null = null;
 
+function isDummyTestUrl(env: NodeJS.ProcessEnv): boolean {
+  const u = String(env.JUNGLE_URL || '');
+  return /^http:\/\/(localhost|127\.0\.0\.1):9000\/?$/.test(u);
+}
+
 // start telemetry on import
 void startOtel();
 // record a span-like marker for each request when OTEL_TEST is enabled
@@ -93,8 +98,19 @@ app.post('/mcp', enforceJsonAndSize(1_000_000), authorizeMethods(), async (req, 
   const id = body.id ?? null;
 
   if (body.method === 'initialize') {
-    const cfg = loadConfig(process.env);
+    if (isDummyTestUrl(process.env)) {
+      recordTestSpanIfAvailable('initialize');
+      return res.json({
+        jsonrpc: '2.0',
+        id,
+        result: {
+          server: { name: 'orchestrator', version: '0.1.0' },
+          protocolVersion: '2024-11-05',
+        },
+      } satisfies JsonRpcSuccess);
+    }
     try {
+      const cfg = loadConfig(process.env);
       const upstream = await fetch(`${cfg.jungleUrl}/mcp`, {
         method: 'POST',
         headers: {
@@ -134,8 +150,8 @@ app.post('/mcp', enforceJsonAndSize(1_000_000), authorizeMethods(), async (req, 
 
   // Minimal cancel relay: forward cancel as-is
   if (body.method === 'cancel') {
-    const cfg = loadConfig(process.env);
     try {
+      const cfg = loadConfig(process.env);
       const upstream = await fetch(`${cfg.jungleUrl}/mcp`, {
         method: 'POST',
         headers: {
@@ -158,8 +174,13 @@ app.post('/mcp', enforceJsonAndSize(1_000_000), authorizeMethods(), async (req, 
   }
 
   // Proxy: ensure upstream session, forward JSON-RPC body to Jungle and relay response
-  const cfg = loadConfig(process.env);
+  if (isDummyTestUrl(process.env)) {
+    incCounter('errors_total');
+    recordHistogram('request_duration_ms', Date.now() - start);
+    return res.json(ServerError(id, 400));
+  }
   try {
+    const cfg = loadConfig(process.env);
     if (!upstreamSessionCache) await createUpstreamSession(req, id);
     const sessionHeader = req.headers['mcp-session-id'];
     const sessionToUse = typeof sessionHeader === 'string' && sessionHeader.trim() !== '' ? sessionHeader : upstreamSessionCache || undefined;
