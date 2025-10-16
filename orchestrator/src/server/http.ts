@@ -77,9 +77,21 @@ app.post('/mcp', enforceJsonAndSize(1_000_000), authorizeMethods(), async (req, 
   const body = req.body;
   const start = Date.now();
   incCounter('requests_total');
+  // Log entry for every MCP request with origin/call-type and minimal metadata
+  const caller = req.headers['user-agent']?.toString() || '';
+  const isCurl = /^curl\//i.test(caller) || caller.toLowerCase().includes('curl');
+  const callType = isCurl ? 'curl' : 'mcp-client';
+  log('info', 'ingress', {
+    source: callType,
+    action: typeof body?.method === 'string' ? body.method : 'unknown',
+    path: req.path,
+    has_session_header: Boolean(req.headers['mcp-session-id']),
+    content_type: req.headers['content-type'] || '',
+  });
   // Content-Type guard: only JSON is accepted
   const ctype = req.headers['content-type'] || '';
   if (typeof ctype !== 'string' || !ctype.startsWith('application/json')) {
+    log('warn', 'ingress_invalid_content_type', { ctype });
     return res.json(InvalidRequest(null));
   }
   if (Array.isArray(body)) {
@@ -92,6 +104,7 @@ app.post('/mcp', enforceJsonAndSize(1_000_000), authorizeMethods(), async (req, 
       const raw = (body as Record<string, unknown>).id;
       id = typeof raw === 'string' || typeof raw === 'number' ? raw : null;
     }
+    log('warn', 'ingress_invalid_jsonrpc_shape', { id });
     return res.json(InvalidRequest(id));
   }
 
@@ -100,6 +113,7 @@ app.post('/mcp', enforceJsonAndSize(1_000_000), authorizeMethods(), async (req, 
   if (body.method === 'initialize') {
     if (isDummyTestUrl(process.env)) {
       recordTestSpanIfAvailable('initialize');
+      log('info', 'initialize_fallback', { reason: 'dummy_test_url' });
       return res.json({
         jsonrpc: '2.0',
         id,
@@ -110,6 +124,7 @@ app.post('/mcp', enforceJsonAndSize(1_000_000), authorizeMethods(), async (req, 
       } satisfies JsonRpcSuccess);
     }
     try {
+      log('info', 'upstream_call', { source: callType, target: 'jungle', action: 'initialize' });
       const cfg = loadConfig(process.env);
       const upstream = await fetch(`${cfg.jungleUrl}/mcp`, {
         method: 'POST',
@@ -130,13 +145,16 @@ app.post('/mcp', enforceJsonAndSize(1_000_000), authorizeMethods(), async (req, 
       const text = await upstream.text();
       try {
         recordTestSpanIfAvailable('initialize');
+        log('info', 'upstream_ok', { source: callType, action: 'initialize', status: upstream.status });
         return res.json(JSON.parse(text));
       } catch {
+        log('warn', 'upstream_non_json', { source: callType, action: 'initialize', status: upstream.status });
         return res.json(ServerError(id, upstream.status));
       }
     } catch {
       // Fallback for unit tests when no upstream is running
       recordTestSpanIfAvailable('initialize');
+      log('warn', 'upstream_failed', { source: callType, action: 'initialize' });
       return res.json({
         jsonrpc: '2.0',
         id,
@@ -177,6 +195,7 @@ app.post('/mcp', enforceJsonAndSize(1_000_000), authorizeMethods(), async (req, 
   if (isDummyTestUrl(process.env)) {
     incCounter('errors_total');
     recordHistogram('request_duration_ms', Date.now() - start);
+    log('info', 'guard_short_circuit', { source: callType, reason: 'dummy_test_url' });
     return res.json(ServerError(id, 400));
   }
   try {
@@ -185,6 +204,7 @@ app.post('/mcp', enforceJsonAndSize(1_000_000), authorizeMethods(), async (req, 
     const sessionHeader = req.headers['mcp-session-id'];
     const sessionToUse = typeof sessionHeader === 'string' && sessionHeader.trim() !== '' ? sessionHeader : upstreamSessionCache || undefined;
 
+    log('info', 'upstream_call', { source: callType, target: 'jungle', action: body.method });
     let upstream = await fetchWithRetry(
       `${cfg.jungleUrl}/mcp`,
       {
@@ -208,6 +228,7 @@ app.post('/mcp', enforceJsonAndSize(1_000_000), authorizeMethods(), async (req, 
     if (upstream.status === 400) {
       await createUpstreamSession(req, id);
       if (upstreamSessionCache) {
+        log('info', 'upstream_call', { source: callType, target: 'jungle', action: body.method, reason: 'retry_after_session_refresh' });
         upstream = await fetchWithRetry(
           `${cfg.jungleUrl}/mcp`,
           {
@@ -257,16 +278,19 @@ app.post('/mcp', enforceJsonAndSize(1_000_000), authorizeMethods(), async (req, 
           lastTs = Date.now();
         });
       }
+      log('info', 'relay_stream', { source: callType, action: body.method, status: upstream.status });
       recordHistogram('request_duration_ms', Date.now() - start);
       return;
     }
     const text = await upstream.text();
     try {
       const parsed = JSON.parse(text);
+      log('info', 'relay_json', { source: callType, action: body.method, status: upstream.status });
       recordHistogram('request_duration_ms', Date.now() - start);
       return res.json(parsed);
     } catch {
       incCounter('errors_total');
+      log('warn', 'relay_non_json_mapped', { source: callType, action: body.method, status: upstream.status });
       recordHistogram('request_duration_ms', Date.now() - start);
       return res.json(ServerError(id, upstream.status));
     }
@@ -275,6 +299,7 @@ app.post('/mcp', enforceJsonAndSize(1_000_000), authorizeMethods(), async (req, 
       recordTestSpanIfAvailable(body.method, { error: (e as Error)?.name || 'error' });
     }
     incCounter('errors_total');
+    log('error', 'relay_exception', { source: callType, action: body.method, error: (e as Error)?.message });
     recordHistogram('request_duration_ms', Date.now() - start);
     return res.json(ServerError(id));
   }
