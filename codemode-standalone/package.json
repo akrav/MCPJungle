@@ -1,0 +1,55 @@
+{
+  "name": "codemode-standalone",
+  "version": "1.0.0",
+  "description": "Standalone implementation of codemode - LLM-generated code execution with MCP integration",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "example:basic": "tsx examples/basic-usage.ts",
+    "example:mcp": "tsx examples/with-mcp-server.ts",
+    "example:advanced": "tsx examples/advanced-llm-integration.ts",
+    "example:anthropic:basic": "tsx examples/llm/anthropic-basic.ts",
+    "example:anthropic:advanced": "tsx examples/llm/anthropic-advanced.ts",
+    "example:full-stack": "tsx examples/llm/full-stack-example.ts",
+    "test:live": "tsx examples/llm/live-integration-test.ts",
+    "test:verify": "tsx examples/llm/verify-execution-mechanism.ts",
+    "test:patterns": "tsx examples/llm/pattern-comparison.ts",
+    "example:tool-calling": "tsx examples/llm/tool-calling-basic.ts",
+    "example:code-only": "tsx examples/llm/code-only-pattern.ts",
+    "test": "tsx tests/run-all-tests.ts",
+    "test:unit": "tsx tests/unit/ToolRegistry.test.ts && tsx tests/unit/TypeGenerator.test.ts && tsx tests/unit/SecurityPolicy.test.ts && tsx tests/unit/MCPToolConverter.test.ts && tsx tests/unit/MCPWorkflow.test.ts",
+    "test:integration": "tsx tests/integration/IsolatedExecutor.test.ts && tsx tests/integration/CodemodeEngine.test.ts",
+    "test:mcp": "tsx tests/unit/MCPToolConverter.test.ts && tsx tests/unit/MCPWorkflow.test.ts",
+    "test:llm": "tsx tests/unit/AnthropicAdapter.test.ts",
+    "mcp:server": "tsx start-mcp-server.ts",
+    "mcp:test": "tsx test-mcp-connection.ts",
+    "mcp:codemode": "tsx start-codemode-mcp-server.ts"
+  },
+  "keywords": [
+    "llm",
+    "code-generation",
+    "mcp",
+    "ai",
+    "isolated-execution"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.65.0",
+    "@modelcontextprotocol/sdk": "^1.20.0",
+    "dotenv": "^17.2.3",
+    "isolated-vm": "^5.0.1",
+    "json-schema-to-typescript": "^15.0.4",
+    "nanoid": "^5.1.6",
+    "zod": "^3.25.76",
+    "zod-to-ts": "^1.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.7.1",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3"
+  }
+}
