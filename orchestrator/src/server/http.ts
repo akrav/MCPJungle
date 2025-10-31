@@ -107,7 +107,7 @@ app.post('/mcp', enforceJsonAndSize(1_000_000), authorizeMethods(), async (req, 
       log('info', 'upstream_call', { source: callType, target: 'jungle', action: 'initialize' });
       const cfg = loadConfig(process.env);
       const userId = req.headers['x-user-id'] ? String(req.headers['x-user-id']) : undefined;
-      const decision = resolveJungleEndpoint({ userId });
+      const decision = await resolveJungleEndpoint({ userId });
       const upstream = await fetch(`${decision.baseUrl}/mcp`, {
         method: 'POST',
         headers: {
@@ -187,7 +187,7 @@ app.post('/mcp', enforceJsonAndSize(1_000_000), authorizeMethods(), async (req, 
   try {
     const cfg = loadConfig(process.env);
     const userId = req.headers['x-user-id'] ? String(req.headers['x-user-id']) : undefined;
-    const decision = resolveJungleEndpoint({ userId });
+    const decision = await resolveJungleEndpoint({ userId });
     if (!getUpstreamSession()) {
       await createUpstreamSession(req, id);
       upstreamSessionCache = getUpstreamSession();

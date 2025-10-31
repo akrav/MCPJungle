@@ -34,4 +34,16 @@ export function clearAll(): void {
   map.clear();
 }
 
+export function listExpired(now: number = Date.now()): Array<{ userId: string; baseUrl: string }> {
+  const out: Array<{ userId: string; baseUrl: string }> = [];
+  for (const [k, v] of map.entries()) {
+    if (now >= v.expiresAt) out.push({ userId: k, baseUrl: v.baseUrl });
+  }
+  return out;
+}
+
+export function size(): number {
+  return map.size;
+}
+
 

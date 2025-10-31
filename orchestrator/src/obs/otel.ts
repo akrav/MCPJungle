@@ -6,6 +6,7 @@ let testMode = false;
 const testFinishedSpans: Array<{ name: string; attrs?: Record<string, unknown> }> = [];
 const testCounters: Record<string, number> = {};
 const testHistograms: Record<string, number[]> = {};
+const testGauges: Record<string, number> = {};
 
 type InMemoryLikeExporter = { getFinishedSpans(): Array<{ name: string; attrs?: Record<string, unknown> }> };
 let testExporter: InMemoryLikeExporter | null = null;
@@ -80,6 +81,14 @@ export function recordHistogram(name: string, value: number): void {
 
 export function getTestMetrics(): { counters: Record<string, number>; histograms: Record<string, number[]> } {
   return { counters: { ...testCounters }, histograms: Object.fromEntries(Object.entries(testHistograms).map(([k,v]) => [k, [...v]])) };
+}
+
+export function setGauge(name: string, value: number): void {
+  if (testMode) testGauges[name] = value;
+}
+
+export function getTestGauges(): Record<string, number> {
+  return { ...testGauges };
 }
 
 

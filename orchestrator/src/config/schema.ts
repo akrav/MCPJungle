@@ -41,6 +41,25 @@ export const configSchema = z.object({
     .optional()
     .transform((v) => (v && v.trim() !== '' ? parseInt(v, 10) : 30 * 60 * 1000))
     .pipe(z.number().int().positive()),
+  PROVISIONER: z
+    .string()
+    .optional()
+    .transform((v) => (v && v.trim() !== '' ? v : 'none'))
+    .pipe(z.enum(['none', 'docker', 'k8s'])),
+  PROVISION_ON_DEMAND: z
+    .string()
+    .optional()
+    .transform((v) => String(v || 'false').toLowerCase() === 'true'),
+  JUNGLE_HEALTH_TIMEOUT_MS: z
+    .string()
+    .optional()
+    .transform((v) => (v && v.trim() !== '' ? parseInt(v, 10) : 20000))
+    .pipe(z.number().int().positive()),
+  JUNGLE_HEALTH_BACKOFF_MS: z
+    .string()
+    .optional()
+    .transform((v) => (v && v.trim() !== '' ? parseInt(v, 10) : 250))
+    .pipe(z.number().int().positive()),
 });
 
 export type OrchestratorConfig = {
@@ -56,4 +75,8 @@ export type OrchestratorConfig = {
   codemodeLogDir?: string;
   routingMode: 'shared' | 'per_user';
   routingUserTtlMs: number;
+  provisioner: 'none' | 'docker' | 'k8s';
+  provisionOnDemand: boolean;
+  jungleHealthTimeoutMs: number;
+  jungleHealthBackoffMs: number;
 };

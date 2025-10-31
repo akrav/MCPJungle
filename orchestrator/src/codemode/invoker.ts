@@ -70,7 +70,7 @@ export async function invokeTool(
     abortController.abort();
   }
 
-  const decision = resolveJungleEndpoint({ userId: ctx.userId });
+  const decision = await resolveJungleEndpoint({ userId: ctx.userId });
   const res = await postToJungle(body, { userId: ctx.userId, useSession: true, signal, baseUrl: decision.baseUrl });
   try { await trace(runId, 'upstream_call', { method: 'tools/call', session: Boolean(getUpstreamSession()), status: res.status }); } catch {}
 
