@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 /**
  * In-memory cache and hashing utilities for codemode type surfaces.
  *
@@ -43,19 +45,40 @@ export class TypedSurfaceCache {
   clear(): void {
     this.store.clear();
   }
+
+  async getOrCreate(
+    key: string,
+    factory: () => Promise<CachedTypedSurface>
+  ): Promise<CachedTypedSurface> {
+    const cached = this.get(key);
+    if (cached) return cached;
+    const created = await factory();
+    this.set(key, created);
+    return created;
+  }
 }
 
 /**
  * Compute a placeholder catalog hash. Stability and normalization will be
  * implemented in Ticket-3103.
  */
-export function computeCatalogHash(_entries: CatalogEntry[]): string {
-  return "stub-catalog-hash";
+export function computeCatalogHash(entries: CatalogEntry[]): string {
+  // Stable, order-insensitive hash of name + schema identifiers
+  const canonical = entries
+    .map((e) => ({ name: e.name, schema: e.schemaEtagOrJson }))
+    .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  const json = JSON.stringify(canonical);
+  return createHash("sha256").update(json).digest("hex");
+}
+
+export function makeCacheKey(userId: string, catalogHash: string): string {
+  return `${userId}:${catalogHash}`;
 }
 
 export default {
   TypedSurfaceCache,
   computeCatalogHash,
+  makeCacheKey,
 };
 
 
