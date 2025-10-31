@@ -5,6 +5,7 @@ import {
   type CatalogEntry,
   makeCacheKey,
 } from "../../src/codemode/cache";
+import { getTypedSurface, setTestClientFactory, type MCPClientLike } from "../../src/codemode/index";
 
 describe("codemode hashing and cache", () => {
   it("computes stable, order-insensitive catalog hash", () => {
@@ -40,6 +41,29 @@ describe("codemode hashing and cache", () => {
 
     expect(first).toBe(second);
     expect(factory).toHaveBeenCalledTimes(1);
+  });
+
+  it("facade getTypedSurface returns stable {dts, hash} and uses cache path", async () => {
+    // Inject mock client for listJungleTools used inside the facade
+    const tools = [
+      { name: "fs__read_file", description: "Read file" },
+      { name: "jungle__list", description: "List tools" },
+    ];
+    const mockClient: MCPClientLike = {
+      async connect() {},
+      getTools() { return tools; },
+      async disconnect() {},
+    };
+    setTestClientFactory(() => mockClient);
+
+    const a = await getTypedSurface({ userId: "u1" });
+    const b = await getTypedSurface({ userId: "u1" });
+
+    expect(a.hash).toBe(b.hash);
+    expect(a.dts).toBe(b.dts);
+
+    // Reset factory after test
+    setTestClientFactory(undefined);
   });
 });
 
