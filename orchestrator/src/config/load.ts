@@ -14,6 +14,8 @@ export function loadConfig(
     CODEMODE_PERSIST_CODE: env.CODEMODE_PERSIST_CODE,
     CODEMODE_VERBOSE_LOGS: env.CODEMODE_VERBOSE_LOGS,
     CODEMODE_LOG_DIR: env.CODEMODE_LOG_DIR,
+    ROUTING_MODE: env.ROUTING_MODE,
+    ROUTING_USER_TTL_MS: env.ROUTING_USER_TTL_MS,
   });
   if (!parsed.success) {
     const msg = parsed.error.issues
@@ -33,5 +35,7 @@ export function loadConfig(
     codemodePersistCode: data.CODEMODE_PERSIST_CODE,
     codemodeVerboseLogs: data.CODEMODE_VERBOSE_LOGS,
     codemodeLogDir: data.CODEMODE_LOG_DIR,
+    routingMode: data.ROUTING_MODE,
+    routingUserTtlMs: data.ROUTING_USER_TTL_MS,
   };
 }

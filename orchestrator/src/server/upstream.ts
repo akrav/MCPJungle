@@ -89,6 +89,7 @@ export async function postToJungle(
     timeoutMs?: number;
     signal?: AbortSignal;
     retries?: number;
+    baseUrl?: string;
   } = {},
 ): Promise<undici.Response> {
   const cfg = loadConfig(process.env);
@@ -113,8 +114,9 @@ export async function postToJungle(
     signal: opts.signal ?? AbortSignal.timeout(opts.timeoutMs ?? cfg.upstreamTimeoutMs),
   };
 
+  const base = (opts.baseUrl || cfg.jungleUrl).replace(/\/$/, '');
   const res = await fetchWithRetry(
-    `${cfg.jungleUrl}/mcp`,
+    `${base}/mcp`,
     init,
     { retries: opts.retries ?? 2, baseMs: 50 },
   );

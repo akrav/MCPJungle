@@ -2,6 +2,7 @@ import { postToJungle, getUpstreamSession } from '../server/upstream.js';
 import { log } from '../obs/log.js';
 import { loadConfig } from '../config/load.js';
 import { trace } from './trace.js';
+import { resolveJungleEndpoint } from '../routing/router.js';
 
 export type InvokeContext = {
   userId?: string;
@@ -69,7 +70,8 @@ export async function invokeTool(
     abortController.abort();
   }
 
-  const res = await postToJungle(body, { userId: ctx.userId, useSession: true, signal });
+  const decision = resolveJungleEndpoint({ userId: ctx.userId });
+  const res = await postToJungle(body, { userId: ctx.userId, useSession: true, signal, baseUrl: decision.baseUrl });
   try { await trace(runId, 'upstream_call', { method: 'tools/call', session: Boolean(getUpstreamSession()), status: res.status }); } catch {}
 
   const ctype = res.headers.get('content-type') || '';

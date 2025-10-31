@@ -17,6 +17,7 @@ import { startOtel, recordTestSpanIfAvailable, incCounter, recordHistogram } fro
 import { log } from '../obs/log.js';
 import type { Request } from 'express';
 import { createUpstreamSession as ensureSession, fetchWithRetry, getUpstreamSession, setUpstreamSession } from './upstream.js';
+import { resolveJungleEndpoint } from '../routing/router.js';
 
 const app = express();
 let upstreamSessionCache: string | null = null;
@@ -105,7 +106,9 @@ app.post('/mcp', enforceJsonAndSize(1_000_000), authorizeMethods(), async (req, 
     try {
       log('info', 'upstream_call', { source: callType, target: 'jungle', action: 'initialize' });
       const cfg = loadConfig(process.env);
-      const upstream = await fetch(`${cfg.jungleUrl}/mcp`, {
+      const userId = req.headers['x-user-id'] ? String(req.headers['x-user-id']) : undefined;
+      const decision = resolveJungleEndpoint({ userId });
+      const upstream = await fetch(`${decision.baseUrl}/mcp`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -183,6 +186,8 @@ app.post('/mcp', enforceJsonAndSize(1_000_000), authorizeMethods(), async (req, 
   }
   try {
     const cfg = loadConfig(process.env);
+    const userId = req.headers['x-user-id'] ? String(req.headers['x-user-id']) : undefined;
+    const decision = resolveJungleEndpoint({ userId });
     if (!getUpstreamSession()) {
       await createUpstreamSession(req, id);
       upstreamSessionCache = getUpstreamSession();
@@ -192,7 +197,7 @@ app.post('/mcp', enforceJsonAndSize(1_000_000), authorizeMethods(), async (req, 
 
     log('info', 'upstream_call', { source: callType, target: 'jungle', action: body.method });
     let upstream = await fetchWithRetry(
-      `${cfg.jungleUrl}/mcp`,
+      `${decision.baseUrl}/mcp`,
       {
         method: 'POST',
         headers: {
@@ -217,7 +222,7 @@ app.post('/mcp', enforceJsonAndSize(1_000_000), authorizeMethods(), async (req, 
       if (sessionRefreshed) {
         log('info', 'upstream_call', { source: callType, target: 'jungle', action: body.method, reason: 'retry_after_session_refresh' });
         upstream = await fetchWithRetry(
-          `${cfg.jungleUrl}/mcp`,
+          `${decision.baseUrl}/mcp`,
           {
             method: 'POST',
             headers: {

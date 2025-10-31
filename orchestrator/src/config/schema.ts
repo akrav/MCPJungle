@@ -31,6 +31,16 @@ export const configSchema = z.object({
     .optional()
     .transform((v) => String(v || 'false').toLowerCase() === 'true'),
   CODEMODE_LOG_DIR: z.string().optional(),
+  ROUTING_MODE: z
+    .string()
+    .optional()
+    .transform((v) => (v && v.trim() !== '' ? v : 'shared'))
+    .pipe(z.enum(['shared', 'per_user'])),
+  ROUTING_USER_TTL_MS: z
+    .string()
+    .optional()
+    .transform((v) => (v && v.trim() !== '' ? parseInt(v, 10) : 30 * 60 * 1000))
+    .pipe(z.number().int().positive()),
 });
 
 export type OrchestratorConfig = {
@@ -44,4 +54,6 @@ export type OrchestratorConfig = {
   codemodePersistCode: boolean;
   codemodeVerboseLogs: boolean;
   codemodeLogDir?: string;
+  routingMode: 'shared' | 'per_user';
+  routingUserTtlMs: number;
 };
