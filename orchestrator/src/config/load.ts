@@ -10,6 +10,8 @@ export function loadConfig(
     LOG_LEVEL: env.LOG_LEVEL ?? 'info',
     JUNGLE_TOKEN: env.JUNGLE_TOKEN,
     ORCH_UPSTREAM_TIMEOUT_MS: env.ORCH_UPSTREAM_TIMEOUT_MS,
+    CODEMODE_TELEMETRY: env.CODEMODE_TELEMETRY,
+    CODEMODE_PERSIST_CODE: env.CODEMODE_PERSIST_CODE,
   });
   if (!parsed.success) {
     const msg = parsed.error.issues
@@ -25,5 +27,7 @@ export function loadConfig(
     logLevel: data.LOG_LEVEL,
     jungleToken: data.JUNGLE_TOKEN,
     upstreamTimeoutMs: data.ORCH_UPSTREAM_TIMEOUT_MS,
+    codemodeTelemetry: data.CODEMODE_TELEMETRY,
+    codemodePersistCode: data.CODEMODE_PERSIST_CODE,
   };
 }

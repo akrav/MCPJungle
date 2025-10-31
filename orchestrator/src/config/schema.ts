@@ -18,6 +18,14 @@ export const configSchema = z.object({
     .optional()
     .transform((v) => (v && v.trim() !== '' ? parseInt(v, 10) : 30000))
     .pipe(z.number().int().positive()),
+  CODEMODE_TELEMETRY: z
+    .string()
+    .optional()
+    .transform((v) => String(v || 'false').toLowerCase() === 'true'),
+  CODEMODE_PERSIST_CODE: z
+    .string()
+    .optional()
+    .transform((v) => String(v || 'false').toLowerCase() === 'true'),
 });
 
 export type OrchestratorConfig = {
@@ -27,4 +35,6 @@ export type OrchestratorConfig = {
   logLevel: string;
   jungleToken?: string;
   upstreamTimeoutMs: number;
+  codemodeTelemetry: boolean;
+  codemodePersistCode: boolean;
 };
