@@ -5,7 +5,10 @@
   "workspaces": [
     "codemode-standalone",
     "orchestrator"
-  ]
+  ],
+  "engines": {
+    "node": ">=20 <21"
+  }
 }
 
 
