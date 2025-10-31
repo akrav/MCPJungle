@@ -22,6 +22,21 @@ describe("codemode scaffold contract", () => {
     expect(typeof computeCatalogHash).toBe("function");
     expect(typeof TypedSurfaceCache).toBe("function");
   });
+
+  it("prompt includes function names and guardrails", () => {
+    const prompt = buildPrompt({
+      functions: [
+        { name: "jungle__list", description: "List tools" },
+        { name: "fs__read_file", description: "Read a file from disk" },
+      ],
+    });
+
+    expect(prompt).toMatch(/Output only code/i);
+    expect(prompt).toMatch(/single async function/i);
+    expect(prompt).toContain("jungle__list");
+    expect(prompt).toContain("fs__read_file");
+    expect(prompt).toContain('codemode["server__tool"]');
+  });
 });
 
 

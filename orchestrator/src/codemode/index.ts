@@ -27,8 +27,39 @@ export async function getTypedSurface(_params: GetTypedSurfaceParams): Promise<T
   };
 }
 
+// --- Sprint 1 Ticket-3105: Jungle tool fetch (smoke; prefer mocks in CI) ---
+export type MCPClientLike = {
+  connect(): Promise<void>;
+  getTools(): Array<{ name: string; description?: string }>;
+  disconnect(): Promise<void>;
+};
+
+export type ListJungleToolsOptions = {
+  url: string;
+  transport: "sse" | "stdio" | "http";
+  headers?: Record<string, string>;
+  clientFactory?: (cfg: { url: string; transport: "sse" | "stdio" | "http"; headers?: Record<string, string> }) => MCPClientLike;
+};
+
+/**
+ * Fetch tools from the user's Jungle via an MCP client. In CI, inject a mock client via clientFactory.
+ */
+export async function listJungleTools(options: ListJungleToolsOptions): Promise<Array<{ name: string; description?: string }>> {
+  const { clientFactory, ...cfg } = options;
+  if (!clientFactory) {
+    // Guard: real network wiring will be added later; for now require injection
+    return [];
+  }
+  const client = clientFactory(cfg);
+  await client.connect();
+  const tools = client.getTools();
+  await client.disconnect();
+  return tools.map((t) => ({ name: t.name, description: t.description }));
+}
+
 export default {
   getTypedSurface,
+  listJungleTools,
 };
 
 
