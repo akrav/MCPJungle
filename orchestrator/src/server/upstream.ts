@@ -1,6 +1,7 @@
 import * as undici from 'undici';
 import type { Request } from 'express';
 import { loadConfig } from '../config/load.js';
+import { log } from '../obs/log.js';
 
 type RetryConfig = { retries: number; baseMs: number };
 
@@ -67,6 +68,7 @@ export async function postToJungle(
   } = {},
 ): Promise<undici.Response> {
   const cfg = loadConfig(process.env);
+  const method = typeof (body as any)?.method === 'string' ? (body as any).method : 'unknown';
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     Accept: 'application/json, text/event-stream',
@@ -92,6 +94,9 @@ export async function postToJungle(
 
   const reflected = res.headers.get('mcp-session-id');
   if (reflected && reflected.trim() !== '') upstreamSessionCache = reflected;
+  try {
+    log('info', 'upstream_post', { method, used_session: Boolean(headers['Mcp-Session-Id']), status: res.status });
+  } catch {}
   return res;
 }
 

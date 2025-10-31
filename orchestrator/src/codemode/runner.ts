@@ -41,6 +41,10 @@ export async function runCode(params: RunCodeParams): Promise<RunCodeResult> {
   const codeHash = computeCodeHash(code);
 
   log("info", "codemode_run_start", { runId, user_id: userId, code_hash: codeHash, catalog_hash: catalogHash });
+  if (cfg.codemodePersistCode && runId) {
+    const preview = code.trim().replace(/\s+/g, ' ').slice(0, 200);
+    log("debug", "codemode_script_preview", { runId, preview_len: preview.length, preview });
+  }
   if (cfg.codemodePersistCode && runId) maybePersistCode(runId, code);
 
   // A registry facade that forwards any name to invoker and enforces tool-call limit
@@ -93,9 +97,11 @@ export async function runCode(params: RunCodeParams): Promise<RunCodeResult> {
     const aliased = `const codemode = tools;\n${code}`;
     const t0 = Date.now();
     const execResult = await withRunSpan({ run_id: runId, user_id: userId, catalog_hash: catalogHash }, async () => {
+      log("debug", "codemode_compile_start", { runId });
       const compiled = await withCompileSpan({ run_id: runId, user_id: userId, catalog_hash: catalogHash }, async () => aliased);
       recordCompileMs(Date.now() - t0);
       const t1 = Date.now();
+      log("debug", "codemode_eval_start", { runId });
       const out = await withEvalSpan({ run_id: runId, user_id: userId, catalog_hash: catalogHash }, async () => executor.execute(compiled));
       recordEvalMs(Date.now() - t1);
       return out;

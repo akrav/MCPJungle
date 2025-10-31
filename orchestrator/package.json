@@ -7,7 +7,8 @@
     "build": "tsc -p tsconfig.json",
     "dev": "tsx src/server/dev.ts",
     "test": "vitest run",
-    "lint": "eslint . --ext .ts"
+    "lint": "eslint . --ext .ts",
+    "codemode:live": "tsx scripts/codemode-live-run.ts"
   },
   "dependencies": {
     "express": "^4.19.2",
