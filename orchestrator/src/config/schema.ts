@@ -26,6 +26,11 @@ export const configSchema = z.object({
     .string()
     .optional()
     .transform((v) => String(v || 'false').toLowerCase() === 'true'),
+  CODEMODE_VERBOSE_LOGS: z
+    .string()
+    .optional()
+    .transform((v) => String(v || 'false').toLowerCase() === 'true'),
+  CODEMODE_LOG_DIR: z.string().optional(),
 });
 
 export type OrchestratorConfig = {
@@ -37,4 +42,6 @@ export type OrchestratorConfig = {
   upstreamTimeoutMs: number;
   codemodeTelemetry: boolean;
   codemodePersistCode: boolean;
+  codemodeVerboseLogs: boolean;
+  codemodeLogDir?: string;
 };

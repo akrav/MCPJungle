@@ -2,6 +2,7 @@ import { log } from "../obs/log.js";
 import { buildLimits, type SecurityLimits } from "./policy.js";
 import { computeCodeHash, incErrors, incToolCalls, maybePersistCode, recordCompileMs, recordEvalMs, recordLimitEvent, withCompileSpan, withEvalSpan, withRunSpan, withToolCallSpan } from "./telemetry.js";
 import { loadConfig } from "../config/load.js";
+import { initTrace, trace } from "./trace.js";
 
 export type RunCodeParams = {
   code: string;
@@ -41,9 +42,11 @@ export async function runCode(params: RunCodeParams): Promise<RunCodeResult> {
   const codeHash = computeCodeHash(code);
 
   log("info", "codemode_run_start", { runId, user_id: userId, code_hash: codeHash, catalog_hash: catalogHash });
+  await initTrace(runId || "", { user_id: userId, catalog_hash: catalogHash });
   if (cfg.codemodePersistCode && runId) {
     const preview = code.trim().replace(/\s+/g, ' ').slice(0, 200);
-    log("debug", "codemode_script_preview", { runId, preview_len: preview.length, preview });
+    if (cfg.codemodeVerboseLogs) log("debug", "codemode_script_preview", { runId, preview_len: preview.length, preview });
+    await trace(runId || "", "script_preview", { preview_len: preview.length });
   }
   if (cfg.codemodePersistCode && runId) maybePersistCode(runId, code);
 
@@ -97,11 +100,13 @@ export async function runCode(params: RunCodeParams): Promise<RunCodeResult> {
     const aliased = `const codemode = tools;\n${code}`;
     const t0 = Date.now();
     const execResult = await withRunSpan({ run_id: runId, user_id: userId, catalog_hash: catalogHash }, async () => {
-      log("debug", "codemode_compile_start", { runId });
+      if (cfg.codemodeVerboseLogs) log("debug", "codemode_compile_start", { runId });
+      await trace(runId || "", "compile_start");
       const compiled = await withCompileSpan({ run_id: runId, user_id: userId, catalog_hash: catalogHash }, async () => aliased);
       recordCompileMs(Date.now() - t0);
       const t1 = Date.now();
-      log("debug", "codemode_eval_start", { runId });
+      if (cfg.codemodeVerboseLogs) log("debug", "codemode_eval_start", { runId });
+      await trace(runId || "", "eval_start");
       const out = await withEvalSpan({ run_id: runId, user_id: userId, catalog_hash: catalogHash }, async () => executor.execute(compiled));
       recordEvalMs(Date.now() - t1);
       return out;

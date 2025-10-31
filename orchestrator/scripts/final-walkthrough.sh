@@ -107,6 +107,8 @@ echo "[final] 9) Code Mode full pipeline via invoker (generates script, calls Ju
   export CODEMODE_TELEMETRY=true
   export CODEMODE_PERSIST_CODE=true
   export LIVE_USER_ID="walkthrough-user"
+  export CODEMODE_LOG_DIR="$LOG_DIR"
+  export CODEMODE_AUTO_INIT=1
   # Default uses stub executor to avoid native build; set CODEMODE_USE_STANDALONE=1 to use real isolates
   npm run -s codemode:live
 ) | tee "$LOG_DIR/05_codemode_live.log"

@@ -57,6 +57,30 @@ export async function createUpstreamSession(req: Request, initId: string | numbe
   }
 }
 
+export async function createStandaloneSession(userId?: string, initId: string | number | null = 0): Promise<string | null> {
+  const cfg = loadConfig(process.env);
+  try {
+    const upstream = await undici.fetch(`${cfg.jungleUrl}/mcp`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json, text/event-stream',
+        ...(cfg.jungleToken ? { Authorization: `Bearer ${cfg.jungleToken}` } : {}),
+        'User-Agent': 'orchestrator/1.0',
+        Forwarded: `proto=http`,
+        ...(userId ? { 'x-user-id': String(userId) } : {}),
+      },
+      body: JSON.stringify({ jsonrpc: '2.0', id: initId ?? 0, method: 'initialize' }),
+      signal: AbortSignal.timeout(cfg.upstreamTimeoutMs),
+    });
+    const s = upstream.headers.get('mcp-session-id');
+    upstreamSessionCache = s && s.trim() !== '' ? s : upstreamSessionCache;
+    return upstreamSessionCache;
+  } catch {
+    return null;
+  }
+}
+
 export async function postToJungle(
   body: unknown,
   opts: {
@@ -69,6 +93,9 @@ export async function postToJungle(
 ): Promise<undici.Response> {
   const cfg = loadConfig(process.env);
   const method = typeof (body as any)?.method === 'string' ? (body as any).method : 'unknown';
+  if (opts.useSession && !upstreamSessionCache && String(process.env.CODEMODE_AUTO_INIT || '0') === '1') {
+    await createStandaloneSession(opts.userId, (body as any)?.id ?? 0);
+  }
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     Accept: 'application/json, text/event-stream',

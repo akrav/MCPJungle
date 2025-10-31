@@ -12,6 +12,8 @@ export function loadConfig(
     ORCH_UPSTREAM_TIMEOUT_MS: env.ORCH_UPSTREAM_TIMEOUT_MS,
     CODEMODE_TELEMETRY: env.CODEMODE_TELEMETRY,
     CODEMODE_PERSIST_CODE: env.CODEMODE_PERSIST_CODE,
+    CODEMODE_VERBOSE_LOGS: env.CODEMODE_VERBOSE_LOGS,
+    CODEMODE_LOG_DIR: env.CODEMODE_LOG_DIR,
   });
   if (!parsed.success) {
     const msg = parsed.error.issues
@@ -29,5 +31,7 @@ export function loadConfig(
     upstreamTimeoutMs: data.ORCH_UPSTREAM_TIMEOUT_MS,
     codemodeTelemetry: data.CODEMODE_TELEMETRY,
     codemodePersistCode: data.CODEMODE_PERSIST_CODE,
+    codemodeVerboseLogs: data.CODEMODE_VERBOSE_LOGS,
+    codemodeLogDir: data.CODEMODE_LOG_DIR,
   };
 }

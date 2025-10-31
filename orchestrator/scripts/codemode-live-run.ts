@@ -10,9 +10,12 @@
 */
 import { __setStandaloneForTests, runCode } from '../src/codemode/runner.js';
 import { invokeTool } from '../src/codemode/invoker.js';
+import * as fs from 'node:fs/promises';
+import * as path from 'node:path';
 
 const userId = process.argv[2] || process.env.LIVE_USER_ID || 'live-user-1';
 const runId = `run-${Date.now().toString(16)}`;
+const logDir = process.env.CODEMODE_LOG_DIR || '';
 
 // If using stubs (default), inject an IsolatedExecutor that evaluates code with a tools proxy
 if (String(process.env.CODEMODE_USE_STANDALONE || '0') !== '1') {
@@ -24,11 +27,12 @@ if (String(process.env.CODEMODE_USE_STANDALONE || '0') !== '1') {
         get: (_t, prop: string) => async (args: unknown) => this.registry.executeTool(String(prop), args),
       });
       try {
-        // Wrap code in a function scope with provided tools alias
-        // runner will already prepend: const codemode = tools;\n
-        // eslint-disable-next-line no-new-func
-        const fn = new Function('tools', `'use strict'; ${code}`) as (tools: any) => any;
-        const result = await Promise.resolve(fn(toolsProxy));
+        // Create an async function so top-level await in user code is valid
+        const AsyncFunction = Object.getPrototypeOf(async function(){}).constructor as new (...args: string[]) => (...args: any[]) => Promise<any>;
+        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+        // @ts-ignore
+        const fn = new AsyncFunction('tools', `'use strict'; ${code}`) as (tools: any) => Promise<any>;
+        const result = await fn(toolsProxy);
         return { success: true, result, executionTime: 1 };
       } catch (error) {
         return { success: false, error, executionTime: 0 };
@@ -51,13 +55,26 @@ async function main() {
     process.exit(2);
   }
   console.log(`[live] runId=${runId} userId=${userId} jungle=${process.env.JUNGLE_URL}`);
+  if (logDir) {
+    try {
+      await fs.mkdir(logDir, { recursive: true });
+      await fs.writeFile(path.join(logDir, '05_codemode_script.js'), code, 'utf8');
+    } catch {}
+  }
   const invoker = async (fn: string, args: unknown) => invokeTool(fn, args, { userId, runId });
   const out = await runCode({ code, invoker, runId, userId });
   if (out.result) {
     console.log(`[live] result ok; keys=${Object.keys(out.result as object).join(',')}`);
-    console.log(JSON.stringify(out.result, null, 2));
+    const json = JSON.stringify(out.result, null, 2);
+    console.log(json);
+    if (logDir) {
+      try { await fs.writeFile(path.join(logDir, '05_codemode_result.json'), json, 'utf8'); } catch {}
+    }
   } else {
     console.error(`[live] diagnostics: ${(out.diagnostics && out.diagnostics.message) || 'unknown'}`);
+    if (logDir) {
+      try { await fs.writeFile(path.join(logDir, '05_codemode_result.json'), JSON.stringify(out, null, 2), 'utf8'); } catch {}
+    }
     process.exit(1);
   }
 }
