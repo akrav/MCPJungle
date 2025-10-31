@@ -1,45 +1,22 @@
-Orchestrator Sprint 0/1
+# Orchestrator
 
-Quickstart (Compose with Jungle)
+## Code Mode Quickstart
 
-```
-cd orchestrator
-docker compose up --build -d
+- Ensure JUNGLE_URL points to your Jungle (e.g., http://localhost:9000).
+- Optional verbose logs: set CODEMODE_VERBOSE_LOGS=true and CODEMODE_LOG_DIR=./logs.
+- Run the live script:
 
-# Orchestrator health
-curl -s http://localhost:8080/healthz
-
-# Proxy initialize (goes to Jungle at http://localhost:9000)
-curl -s -H 'Content-Type: application/json' \
-  -d '{"jsonrpc":"2.0","id":1,"method":"initialize"}' \
-  http://localhost:8080/mcp
+```bash
+npm run codemode:live
 ```
 
-Compose Quickstart (copy-paste)
-```
-cp deploy/compose.env.example .env || true
-docker compose up -d
-curl -s http://localhost:8080/healthz
-curl -s -H 'Content-Type: application/json' \
-  -d '{"jsonrpc":"2.0","id":1,"method":"initialize"}' \
-  http://localhost:8080/mcp
-```
+Expected: JSON printed with { id, docs } fields.
 
-Notes
-- GET /mcp is rejected (405); POST only.
-- Array bodies to /mcp are rejected (-32600).
-- Unknown methods proxy to JUNGLE_URL/mcp.
-- Progress is streamed when upstream supports it.
+## Operator Runbook
 
-Sprint 1 notes
-- Error mapping: non-JSON/5xx → JSON-RPC ServerError with status
-- Timeout: `ORCH_UPSTREAM_TIMEOUT_MS` enforced via AbortSignal
-- Retry: 2x on 502/503 with backoff+jitter
-- Header hygiene: `User-Agent`, `Forwarded`, optional `Authorization`
-
-Security (TLS/mTLS)
-- Terminate TLS at your ingress (NGINX/Envoy/Cloud LB) and forward to orchestrator over HTTP inside the cluster.
-- Prefer a service mesh (e.g., Istio/Linkerd) or mTLS between internal services for transport security.
-- Keep bearer tokens and secrets in headers; logs are redacted. Avoid PII in URLs.
+- Routing modes: ROUTING_MODE=shared|per_user (default shared).
+- Provisioning flags (dev/staging): PROVISIONER=none|docker|k8s, PROVISION_ON_DEMAND=true|false.
+- Health timeouts: JUNGLE_HEALTH_TIMEOUT_MS, JUNGLE_HEALTH_BACKOFF_MS.
+- Logs: Code Mode traces at ${CODEMODE_LOG_DIR}/codemode-run-<runId>.log when verbose enabled.
 
 
