@@ -100,6 +100,17 @@ curl -s -H 'Content-Type: application/json' \
   -d "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/call\",\"params\":{\"name\":\"context7__get-library-docs\",\"arguments\":{\"context7CompatibleLibraryID\":\"$LIB_ID\",\"tokens\":2000}}}" \
   http://localhost:18081/mcp | tee "$LOG_DIR/04_docs.json" >/dev/null
 
+echo "[final] 9) Code Mode full pipeline via invoker (generates script, calls Jungle tools)"
+(
+  export JUNGLE_URL="http://localhost:9000"
+  export OTEL_TEST=true
+  export CODEMODE_TELEMETRY=true
+  export CODEMODE_PERSIST_CODE=true
+  export LIVE_USER_ID="walkthrough-user"
+  # Default uses stub executor to avoid native build; set CODEMODE_USE_STANDALONE=1 to use real isolates
+  npm run -s codemode:live
+) | tee "$LOG_DIR/05_codemode_live.log"
+
 echo "[final] capturing container logs"
 docker compose logs orchestrator > "$LOG_DIR/orchestrator.log" || true
 docker compose logs jungle > "$LOG_DIR/jungle.log" || true
