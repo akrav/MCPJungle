@@ -17,5 +17,7 @@ Tests
 Accept when
 - Green path fully works without Jungle wiring.
 
+Status: Completed – 2025-10-31
+
 Process
 - Implement → write tests → run → fix → push.

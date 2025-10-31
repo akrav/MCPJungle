@@ -17,5 +17,7 @@ Tests
 Accept when
 - Memory-limit diagnostics returned; host remains responsive.
 
+Status: Completed – 2025-10-31
+
 Process
 - Implement → write tests → run → fix → push.

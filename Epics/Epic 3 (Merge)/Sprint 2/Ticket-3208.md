@@ -17,5 +17,7 @@ Tests
 Accept when
 - Logs include runId for each run; no PII.
 
+Status: Completed – 2025-10-31
+
 Process
 - Implement → write tests → run → fix → push.

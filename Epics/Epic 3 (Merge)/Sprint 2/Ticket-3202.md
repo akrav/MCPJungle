@@ -18,5 +18,7 @@ Tests
 Accept when
 - Names and arguments forwarded verbatim; non-string props error clearly.
 
+Status: Completed – 2025-10-31
+
 Process
 - Implement → write tests → run tests → fix → push to Orchestrator-CodeMode-Merge.

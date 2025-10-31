@@ -17,5 +17,7 @@ Tests
 Accept when
 - Ambient API use impossible; errors clear and consistent.
 
+Status: Completed – 2025-10-31
+
 Process
 - Implement → write tests → run → fix → push.

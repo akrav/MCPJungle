@@ -19,5 +19,7 @@ Tests
 Accept when
 - Limits configurable and enforced in runner.
 
+Status: Completed – 2025-10-31
+
 Process
 - Implement → write tests → run → fix → push.
