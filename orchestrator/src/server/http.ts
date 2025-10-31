@@ -16,6 +16,7 @@ import type { ReadableStream as WebReadableStream } from 'stream/web';
 import { startOtel, recordTestSpanIfAvailable, incCounter, recordHistogram } from '../obs/otel.js';
 import { log } from '../obs/log.js';
 import type { Request } from 'express';
+import { createUpstreamSession as ensureSession, fetchWithRetry, getUpstreamSession, setUpstreamSession } from './upstream.js';
 
 const app = express();
 let upstreamSessionCache: string | null = null;
@@ -48,29 +49,7 @@ app.get('/healthz', healthz);
 // Explicitly reject GET on /mcp per bootstrap contract
 app.get('/mcp', (_req, res) => res.sendStatus(405));
 
-async function createUpstreamSession(req: Request, initId: string | number | null): Promise<string | null> {
-  const cfg = loadConfig(process.env);
-  try {
-    const upstream = await fetch(`${cfg.jungleUrl}/mcp`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Accept: 'application/json, text/event-stream',
-        ...(cfg.jungleToken ? { Authorization: `Bearer ${cfg.jungleToken}` } : {}),
-        'User-Agent': 'orchestrator/1.0',
-        Forwarded: `proto=http`,
-        ...(req.headers['x-user-id'] ? { 'x-user-id': String(req.headers['x-user-id']) } : {}),
-      },
-      body: JSON.stringify({ jsonrpc: '2.0', id: initId ?? 0, method: 'initialize' }),
-      signal: AbortSignal.timeout(cfg.upstreamTimeoutMs),
-    });
-    const s = upstream.headers.get('mcp-session-id');
-    upstreamSessionCache = s && s.trim() !== '' ? s : upstreamSessionCache;
-    return upstreamSessionCache;
-  } catch {
-    return null;
-  }
-}
+const createUpstreamSession = ensureSession;
 
 // Minimal /mcp POST bootstrap: reject arrays, accept single object
 app.post('/mcp', enforceJsonAndSize(1_000_000), authorizeMethods(), async (req, res) => {
@@ -140,8 +119,12 @@ app.post('/mcp', enforceJsonAndSize(1_000_000), authorizeMethods(), async (req, 
         signal: AbortSignal.timeout(cfg.upstreamTimeoutMs),
       });
       const upstreamSession = upstream.headers.get('mcp-session-id');
-      if (upstreamSession) upstreamSessionCache = upstreamSession;
-      if (upstreamSessionCache) res.setHeader('Mcp-Session-Id', upstreamSessionCache);
+      if (upstreamSession) {
+        upstreamSessionCache = upstreamSession;
+        setUpstreamSession(upstreamSession);
+      }
+      const sessionNow = getUpstreamSession();
+      if (sessionNow) res.setHeader('Mcp-Session-Id', sessionNow);
       const text = await upstream.text();
       try {
         recordTestSpanIfAvailable('initialize');
@@ -200,9 +183,12 @@ app.post('/mcp', enforceJsonAndSize(1_000_000), authorizeMethods(), async (req, 
   }
   try {
     const cfg = loadConfig(process.env);
-    if (!upstreamSessionCache) await createUpstreamSession(req, id);
+    if (!getUpstreamSession()) {
+      await createUpstreamSession(req, id);
+      upstreamSessionCache = getUpstreamSession();
+    }
     const sessionHeader = req.headers['mcp-session-id'];
-    const sessionToUse = typeof sessionHeader === 'string' && sessionHeader.trim() !== '' ? sessionHeader : upstreamSessionCache || undefined;
+    const sessionToUse = typeof sessionHeader === 'string' && sessionHeader.trim() !== '' ? sessionHeader : getUpstreamSession() || undefined;
 
     log('info', 'upstream_call', { source: callType, target: 'jungle', action: body.method });
     let upstream = await fetchWithRetry(
@@ -227,7 +213,8 @@ app.post('/mcp', enforceJsonAndSize(1_000_000), authorizeMethods(), async (req, 
     // If 400, refresh session once and retry
     if (upstream.status === 400) {
       await createUpstreamSession(req, id);
-      if (upstreamSessionCache) {
+      const sessionRefreshed = getUpstreamSession();
+      if (sessionRefreshed) {
         log('info', 'upstream_call', { source: callType, target: 'jungle', action: body.method, reason: 'retry_after_session_refresh' });
         upstream = await fetchWithRetry(
           `${cfg.jungleUrl}/mcp`,
@@ -240,14 +227,14 @@ app.post('/mcp', enforceJsonAndSize(1_000_000), authorizeMethods(), async (req, 
               'User-Agent': 'orchestrator/1.0',
               Forwarded: `proto=http`,
               ...(req.headers['x-user-id'] ? { 'x-user-id': String(req.headers['x-user-id']) } : {}),
-              'Mcp-Session-Id': upstreamSessionCache,
+              'Mcp-Session-Id': sessionRefreshed,
             },
             body: JSON.stringify(body),
             signal: AbortSignal.timeout(cfg.upstreamTimeoutMs),
           },
           { retries: 1, baseMs: 50 },
         );
-        res.setHeader('Mcp-Session-Id', upstreamSessionCache);
+        res.setHeader('Mcp-Session-Id', sessionRefreshed);
       }
     }
 
@@ -260,8 +247,12 @@ app.post('/mcp', enforceJsonAndSize(1_000_000), authorizeMethods(), async (req, 
     const upstreamContentType = upstream.headers.get('content-type') ?? '';
     const isJson = typeof upstreamContentType === 'string' && upstreamContentType.startsWith('application/json');
     const reflectedSession = upstream.headers.get('mcp-session-id');
-    if (reflectedSession) upstreamSessionCache = reflectedSession;
-    if (upstreamSessionCache) res.setHeader('Mcp-Session-Id', upstreamSessionCache);
+    if (reflectedSession) {
+      upstreamSessionCache = reflectedSession;
+      setUpstreamSession(reflectedSession);
+    }
+    const sessionNow2 = getUpstreamSession();
+    if (sessionNow2) res.setHeader('Mcp-Session-Id', sessionNow2);
 
     if (upstream.ok && upstream.body && isJson) {
       res.setHeader('Content-Type', upstreamContentType || 'application/json');
@@ -305,20 +296,6 @@ app.post('/mcp', enforceJsonAndSize(1_000_000), authorizeMethods(), async (req, 
   }
 });
 
-type RetryConfig = { retries: number; baseMs: number };
 type FetchInit = Parameters<typeof fetch>[1];
-async function fetchWithRetry(url: string, init: FetchInit, cfg: RetryConfig) {
-  let attempt = 0;
-  // eslint-disable-next-line no-constant-condition
-  while (true) {
-    const res = await fetch(url, init);
-    if (res.status !== 502 && res.status !== 503) return res;
-    if (attempt >= cfg.retries) return res;
-    attempt++;
-    const jitter = Math.random() * cfg.baseMs;
-    const delay = cfg.baseMs * Math.pow(2, attempt - 1) + jitter;
-    await new Promise((r) => setTimeout(r, delay));
-  }
-}
 
 export default app;
