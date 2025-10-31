@@ -1,3 +1,5 @@
+import type { TypeGenerator } from "codemode-standalone";
+
 /**
  * Type generation adapter for orchestrator codemode.
  *

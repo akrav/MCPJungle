@@ -81,11 +81,22 @@ export type ListJungleToolsOptions = {
  */
 export async function listJungleTools(options: ListJungleToolsOptions): Promise<Array<{ name: string; description?: string }>> {
   const { clientFactory, ...cfg } = options;
-  if (!clientFactory) {
-    // Guard: real network wiring will be added later; for now require injection
+  let client: MCPClientLike;
+  if (clientFactory) {
+    client = clientFactory(cfg);
+  } else if (process.env.CODEMODE_USE_STANDALONE === "1") {
+    // Optional dynamic bridge to codemode-standalone; off by default in CI/tests
+    const mod = await import("codemode-standalone");
+    // eslint-disable-next-line new-cap
+    client = new mod.MCPClient({
+      url: cfg.url,
+      transport: cfg.transport,
+      headers: cfg.headers,
+    });
+  } else {
+    // No factory and bridge disabled → return empty list (safe default for unit tests)
     return [];
   }
-  const client = clientFactory(cfg);
   await client.connect();
   const tools = client.getTools();
   await client.disconnect();
