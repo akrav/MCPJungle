@@ -1,0 +1,6 @@
+[2025-11-04T03:31:39.133Z] start runId=run-19a4ceb95f6 {"user_id":"bob"}
+[2025-11-04T03:31:39.134Z] compile_start 
+[2025-11-04T03:31:39.135Z] eval_start 
+[2025-11-04T03:31:39.136Z] invoke_start {"fn":"context7__resolve-library-id","arg_bytes":24}
+[2025-11-04T03:31:39.163Z] upstream_call {"method":"tools/call","session":true,"status":200}
+[2025-11-04T03:31:39.164Z] chunk {"size":149}

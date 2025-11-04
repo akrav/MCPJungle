@@ -1,0 +1,10 @@
+orchestrator-1  | orchestrator listening on http://0.0.0.0:8080
+orchestrator-1  | {"level":"info","msg":"ingress","ts":"2025-11-04T03:32:36.364Z","source":"curl","action":"initialize","path":"/mcp","has_session_header":false,"content_type":"application/json"}
+orchestrator-1  | {"level":"info","msg":"upstream_call","ts":"2025-11-04T03:32:36.364Z","source":"curl","target":"jungle","action":"initialize"}
+orchestrator-1  | {"level":"info","msg":"upstream_ok","ts":"2025-11-04T03:32:36.397Z","source":"curl","action":"initialize","status":200}
+orchestrator-1  | {"level":"info","msg":"ingress","ts":"2025-11-04T03:32:36.423Z","source":"curl","action":"initialize","path":"/mcp","has_session_header":false,"content_type":"application/json"}
+orchestrator-1  | {"level":"info","msg":"upstream_call","ts":"2025-11-04T03:32:36.424Z","source":"curl","target":"jungle","action":"initialize"}
+orchestrator-1  | {"level":"info","msg":"upstream_ok","ts":"2025-11-04T03:32:36.430Z","source":"curl","action":"initialize","status":200}
+orchestrator-1  | {"level":"info","msg":"ingress","ts":"2025-11-04T03:32:59.384Z","source":"curl","action":"initialize","path":"/mcp","has_session_header":false,"content_type":"application/json"}
+orchestrator-1  | {"level":"info","msg":"upstream_call","ts":"2025-11-04T03:32:59.385Z","source":"curl","target":"jungle","action":"initialize"}
+orchestrator-1  | {"level":"info","msg":"upstream_ok","ts":"2025-11-04T03:32:59.395Z","source":"curl","action":"initialize","status":200}

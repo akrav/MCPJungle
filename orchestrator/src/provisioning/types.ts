@@ -18,20 +18,19 @@ export class NoopProvisioner implements Provisioner {
 
 import { loadConfig } from '../config/load.js';
 
-export function getProvisioner(): Provisioner {
+export async function getProvisioner(): Promise<Provisioner> {
   const cfg = loadConfig(process.env);
   switch (cfg.provisioner) {
     case 'none':
       return new NoopProvisioner();
-    case 'docker':
-      // dynamic import to avoid hard dependency
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const docker = require('./docker');
+    case 'docker': {
+      const docker = await import('./docker.js');
       return new docker.DockerProvisioner();
-    case 'k8s':
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const k8s = require('./k8s');
+    }
+    case 'k8s': {
+      const k8s = await import('./k8s.js');
       return new k8s.K8sProvisioner();
+    }
     default:
       return new NoopProvisioner();
   }

@@ -5,7 +5,6 @@ import { incCounter, recordHistogram } from '../obs/otel.js';
 import type { RouteDecision } from './types.js';
 import { getProvisioner } from '../provisioning/types.js';
 import { waitForHealthy } from '../provisioning/health.js';
-import { loadConfig } from '../config/load.js';
 
 export async function resolveJungleEndpoint({ userId }: { userId?: string }): Promise<RouteDecision> {
   const cfg = loadConfig(process.env);
@@ -31,7 +30,7 @@ export async function resolveJungleEndpoint({ userId }: { userId?: string }): Pr
       incCounter('provision_attempts_total', 1);
       log('info', 'provision_start', { user_id: userId });
       const t0 = Date.now();
-      const prov = getProvisioner();
+      const prov = await getProvisioner();
       const { baseUrl } = await prov.provision(userId);
       await waitForHealthy(baseUrl, { timeoutMs: cfg.jungleHealthTimeoutMs, backoffMs: cfg.jungleHealthBackoffMs });
       storeSet(userId, baseUrl, cfg.routingUserTtlMs);
@@ -39,7 +38,7 @@ export async function resolveJungleEndpoint({ userId }: { userId?: string }): Pr
       incCounter('route_mode_total.per_user', 1);
       log('info', 'route_provisioned', { user_id: userId, baseUrl });
       // Gauge approximation: set as counter of current known entries
-      try { const { setGauge } = require('../obs/otel.js'); setGauge?.('instances_active', storeSize()); } catch {}
+      try { const { setGauge } = await import('../obs/otel.js'); setGauge?.('instances_active', storeSize()); } catch {}
       const decision: RouteDecision = { baseUrl, mode: 'per_user' };
       log('info', 'route_decision', { mode: decision.mode, user_id: userId, baseUrl: decision.baseUrl });
       return decision;
