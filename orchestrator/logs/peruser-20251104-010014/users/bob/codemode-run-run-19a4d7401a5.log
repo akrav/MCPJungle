@@ -1,0 +1,11 @@
+[2025-11-04T06:00:39.597Z] start runId=run-19a4d7401a5 {"user_id":"bob"}
+[2025-11-04T06:00:39.598Z] compile_start 
+[2025-11-04T06:00:39.599Z] eval_start 
+[2025-11-04T06:00:39.600Z] invoke_start {"fn":"context7__resolve-library-id","arg_bytes":24}
+[2025-11-04T06:00:40.292Z] upstream_call {"method":"tools/call","session":true,"status":200}
+[2025-11-04T06:00:40.294Z] chunk {"size":10238}
+[2025-11-04T06:00:40.296Z] invoke_end {"fn":"context7__resolve-library-id","result_bytes":10177,"result_type":"object"}
+[2025-11-04T06:00:40.296Z] invoke_start {"fn":"context7__get-library-docs","arg_bytes":62}
+[2025-11-04T06:00:40.733Z] upstream_call {"method":"tools/call","session":true,"status":200}
+[2025-11-04T06:00:40.736Z] chunk {"size":40356}
+[2025-11-04T06:00:40.739Z] invoke_end {"fn":"context7__get-library-docs","result_bytes":40055,"result_type":"object"}

@@ -481,6 +481,90 @@ curl -s -H 'Content-Type: application/json' \
   http://localhost:18081/mcp | jq .
 ```
 
+# 14a) script run
+
+cd /Users/adam/Documents/GitHub/MCPJungle/orchestrator
+CODEMODE_VERBOSE_LOGS=true npm run walkthrough:final
+or
+npm run walkthrough:final
+
+---
+
+# 14b) Quick shared Jungle run (one terminal)
+
+1) Start shared stack
+```bash
+cd orchestrator
+docker compose down -v
+ORCH_HOST_PORT=18081 docker compose up -d
+```
+
+2) Initialize via orchestrator and capture session
+```bash
+SESSION=$(\
+  curl -is -H 'Content-Type: application/json' \
+    -d '{"jsonrpc":"2.0","id":1,"method":"initialize"}' \
+    http://localhost:18081/mcp | awk -F': ' '/^Mcp-Session-Id:/ {gsub("\r","",$2); print $2}'
+)
+echo "SESSION=$SESSION"
+```
+
+3) (Optional) Register Context7 to shared Jungle once
+```bash
+cd ..
+go build -o mcpjungle .
+./mcpjungle --registry http://localhost:9000 register \
+  --name context7 --description "Context7" --url https://mcp.context7.com/mcp || true
+./mcpjungle --registry http://localhost:9000 list servers
+cd orchestrator
+```
+
+4) Call Context7 via orchestrator (shared)
+```bash
+curl -s \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json, text/event-stream' \
+  -H "Mcp-Session-Id: $SESSION" \
+  -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"context7__resolve-library-id","arguments":{"libraryName":"lodash"}}}' \
+  http://localhost:18081/mcp | jq .
+```
+
+5) Code Mode run (shared)
+```bash
+CODEMODE_VERBOSE_LOGS=true CODEMODE_LOG_DIR=./logs LIVE_USER_ID=shared npm run -s codemode:live
+```
+
+---
+
+# 14c) Per-user run (Alice and Bob)
+
+1) Start stack and enable per-user provisioning
+```bash
+cd orchestrator
+docker compose down -v
+ORCH_HOST_PORT=18081 docker compose up -d
+export ROUTING_MODE=per_user
+export PROVISION_ON_DEMAND=true
+export PROVISIONER=docker
+```
+
+2) Run automated per-user walkthrough (creates per-user logs under logs/peruser-<ts>/users/<user>)
+```bash
+npm run walkthrough:peruser
+```
+
+Artifacts:
+- users/alice and users/bob folders each contain: initialize, servers, codemode script/result, codemode trace, container logs
+- orchestrator.log at the root shows route_decision=per_user and route_provisioned for each user
+
+Notes:
+- Re-registering the same MCP shows a duplicate error; it’s safe to ignore if `servers.txt` lists it.
+- tools/list is for local Jungle tools; remote MCPs do not appear there by design.
+- Direct curl calls may rate limit briefly; the script retries.
+
+npm run walkthrough:peruser
+
+
 ## 15) Verify per-user isolation (two independent MCPJungle stores)
 
 Approach: run two separate stacks using different compose projects and a second compose file for user B (to avoid host port conflicts on Jungle).
@@ -598,3 +682,4 @@ You can find the full operational steps, Docker lifecycle, and LLM configs in:
   - Section 10: LLM clients
   - Sections 11–15: multi-user isolation and verification
   - Sections 13–14: Docker lifecycle and full from-scratch runs
+

@@ -16,6 +16,7 @@ import * as path from 'node:path';
 const userId = process.argv[2] || process.env.LIVE_USER_ID || 'live-user-1';
 const runId = `run-${Date.now().toString(16)}`;
 const logDir = process.env.CODEMODE_LOG_DIR || '';
+const outPrefix = process.env.CODEMODE_OUT_PREFIX || `${userId}_${runId}`;
 
 // If using stubs (default), inject an IsolatedExecutor that evaluates code with a tools proxy
 if (String(process.env.CODEMODE_USE_STANDALONE || '0') !== '1') {
@@ -58,7 +59,7 @@ async function main() {
   if (logDir) {
     try {
       await fs.mkdir(logDir, { recursive: true });
-      await fs.writeFile(path.join(logDir, '05_codemode_script.js'), code, 'utf8');
+      await fs.writeFile(path.join(logDir, `05_${outPrefix}_codemode_script.js`), code, 'utf8');
     } catch {}
   }
   const invoker = async (fn: string, args: unknown) => invokeTool(fn, args, { userId, runId });
@@ -68,12 +69,12 @@ async function main() {
     const json = JSON.stringify(out.result, null, 2);
     console.log(json);
     if (logDir) {
-      try { await fs.writeFile(path.join(logDir, '05_codemode_result.json'), json, 'utf8'); } catch {}
+      try { await fs.writeFile(path.join(logDir, `05_${outPrefix}_codemode_result.json`), json, 'utf8'); } catch {}
     }
   } else {
     console.error(`[live] diagnostics: ${(out.diagnostics && out.diagnostics.message) || 'unknown'}`);
     if (logDir) {
-      try { await fs.writeFile(path.join(logDir, '05_codemode_result.json'), JSON.stringify(out, null, 2), 'utf8'); } catch {}
+      try { await fs.writeFile(path.join(logDir, `05_${outPrefix}_codemode_result.json`), JSON.stringify(out, null, 2), 'utf8'); } catch {}
     }
     process.exit(1);
   }
