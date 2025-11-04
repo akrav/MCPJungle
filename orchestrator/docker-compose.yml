@@ -6,6 +6,10 @@ services:
     environment:
       - JUNGLE_URL=http://jungle:9000
       - BIND=0.0.0.0
+      - CODEMODE_ENABLED=${CODEMODE_ENABLED:-false}
+      - CODEMODE_ENABLE_LLM=${CODEMODE_ENABLE_LLM:-true}
+      - CODEMODE_MAX_EXEC_MS=${CODEMODE_MAX_EXEC_MS:-10000}
+      - CODEMODE_MAX_MEM_MB=${CODEMODE_MAX_MEM_MB:-128}
     depends_on:
       jungle:
         condition: service_healthy

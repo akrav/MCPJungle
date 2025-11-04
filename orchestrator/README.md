@@ -31,6 +31,29 @@ Notes
 - Unknown methods proxy to JUNGLE_URL/mcp.
 - Progress is streamed when upstream supports it.
 
+Codemode (optional)
+
+Enable codemode tools to expose a local execution engine that orchestrates across all tools registered in Jungle.
+
+Environment:
+
+```
+CODEMODE_ENABLED=false               # default off to preserve pure pass-through
+CODEMODE_ENABLE_LLM=true             # list executeCode when Anthropic key is present
+CODEMODE_MAX_EXEC_MS=10000           # code execution timeout
+CODEMODE_MAX_MEM_MB=128              # isolate memory limit (MB)
+# Optional Anthropic key for executeCode
+# ANTHROPIC_API_KEY=sk-ant-...
+```
+
+Behavior:
+
+- When enabled, tools/list is augmented with:
+  - codemode__executeCode (requires Anthropic key)
+  - codemode__executeCodeWithTools
+  - codemode__listAvailableTools
+- tools/call requests to names starting with `codemode__` are handled locally; all other tools are proxied to Jungle.
+
 Sprint 1 notes
 - Error mapping: non-JSON/5xx → JSON-RPC ServerError with status
 - Timeout: `ORCH_UPSTREAM_TIMEOUT_MS` enforced via AbortSignal

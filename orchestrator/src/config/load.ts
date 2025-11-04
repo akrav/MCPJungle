@@ -10,6 +10,11 @@ export function loadConfig(
     LOG_LEVEL: env.LOG_LEVEL ?? 'info',
     JUNGLE_TOKEN: env.JUNGLE_TOKEN,
     ORCH_UPSTREAM_TIMEOUT_MS: env.ORCH_UPSTREAM_TIMEOUT_MS,
+    CODEMODE_ENABLED: env.CODEMODE_ENABLED,
+    CODEMODE_ENABLE_LLM: env.CODEMODE_ENABLE_LLM,
+    CODEMODE_MAX_EXEC_MS: env.CODEMODE_MAX_EXEC_MS,
+    CODEMODE_MAX_MEM_MB: env.CODEMODE_MAX_MEM_MB,
+    CODEMODE_VERBOSE: env.CODEMODE_VERBOSE,
   });
   if (!parsed.success) {
     const msg = parsed.error.issues
@@ -25,5 +30,10 @@ export function loadConfig(
     logLevel: data.LOG_LEVEL,
     jungleToken: data.JUNGLE_TOKEN,
     upstreamTimeoutMs: data.ORCH_UPSTREAM_TIMEOUT_MS,
+    codemodeEnabled: data.CODEMODE_ENABLED,
+    codemodeEnableLlm: data.CODEMODE_ENABLE_LLM,
+    codemodeMaxExecMs: data.CODEMODE_MAX_EXEC_MS,
+    codemodeMaxMemMb: data.CODEMODE_MAX_MEM_MB,
+    codemodeVerbose: data.CODEMODE_VERBOSE,
   };
 }

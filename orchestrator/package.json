@@ -6,6 +6,7 @@
     "build": "tsc -p tsconfig.json",
     "dev": "tsx src/server/dev.ts",
     "test": "vitest run",
+    "test:e2e": "vitest run tests-e2e --reporter=default",
     "lint": "eslint . --ext .ts"
   },
   "dependencies": {

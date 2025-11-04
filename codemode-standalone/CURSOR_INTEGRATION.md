@@ -8,6 +8,8 @@ This server exposes the codemode execution engine as an MCP tool, allowing Curso
 
 ## 🎯 Integration Steps for Cursor
 
+Note: If you are using the unified Orchestrator + MCPJungle gateway, these codemode tools are also available at your orchestrator endpoint (e.g., `http://localhost:8080/mcp`) when `CODEMODE_ENABLED=true`. You can point Cursor to the orchestrator URL instead of the standalone Codemode server.
+
 ### Step 1: Open Cursor Settings
 
 1. Open Cursor

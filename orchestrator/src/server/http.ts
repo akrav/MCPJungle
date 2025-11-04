@@ -16,6 +16,8 @@ import type { ReadableStream as WebReadableStream } from 'stream/web';
 import { startOtel, recordTestSpanIfAvailable, incCounter, recordHistogram } from '../obs/otel.js';
 import { log } from '../obs/log.js';
 import type { Request } from 'express';
+import { getCodemodeToolDescriptors, handleCodemodeCall } from '../codemode/service.js';
+import { UpstreamClient } from '../codemode/upstream.js';
 
 const app = express();
 let upstreamSessionCache: string | null = null;
@@ -166,6 +168,30 @@ app.post('/mcp', enforceJsonAndSize(1_000_000), authorizeMethods(), async (req, 
     }
   }
 
+  // Intercept tools/list to merge codemode tools
+  if (body.method === 'tools/list') {
+    const cfg = loadConfig(process.env);
+    if (cfg.codemodeEnabled) {
+      try {
+        const client = new UpstreamClient();
+        const tools = await client.listTools(req, id);
+        const codemode = getCodemodeToolDescriptors();
+        recordTestSpanIfAvailable('tools/list');
+        log('info', 'tools_list_merge', { upstream: tools.length, codemode: codemode.length });
+        return res.json({
+          jsonrpc: '2.0',
+          id,
+          result: { tools: [...tools, ...codemode] },
+        } satisfies JsonRpcSuccess);
+      } catch (e) {
+        incCounter('errors_total');
+        log('warn', 'tools_list_merge_failed', { error: (e as Error)?.message });
+        // Fall back to proxying upstream if merge fails
+      }
+    }
+    // fallthrough to proxy path below when codemode disabled or merge failed
+  }
+
   // Minimal cancel relay: forward cancel as-is
   if (body.method === 'cancel') {
     try {
@@ -256,6 +282,19 @@ app.post('/mcp', enforceJsonAndSize(1_000_000), authorizeMethods(), async (req, 
       const params = (body.params ?? {}) as Record<string, unknown>;
       const tool = typeof params['name'] === 'string' ? (params['name'] as string) : undefined;
       recordTestSpanIfAvailable('tools/call', { tool });
+      // Intercept codemode tools and handle locally
+      const cfg2 = loadConfig(process.env);
+      if (cfg2.codemodeEnabled && tool && typeof tool === 'string' && tool.startsWith('codemode__')) {
+        try {
+          const result = await handleCodemodeCall(req, id, tool, (body.params as any)?.arguments ?? {});
+          log('info', 'codemode_call', { tool });
+          return res.json({ jsonrpc: '2.0', id, result } satisfies JsonRpcSuccess);
+        } catch (e) {
+          incCounter('errors_total');
+          log('error', 'codemode_call_failed', { tool, error: (e as Error)?.message });
+          return res.json(ServerError(id));
+        }
+      }
     }
     const upstreamContentType = upstream.headers.get('content-type') ?? '';
     const isJson = typeof upstreamContentType === 'string' && upstreamContentType.startsWith('application/json');
