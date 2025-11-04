@@ -31,15 +31,21 @@ export class DockerProvisioner implements Provisioner {
     const name = `jungle-${userId}`;
     const env: Record<string,string> = { SERVER_MODE: 'development', PORT: '9000' };
     if (cfg.jungleToken) env['JUNGLE_TOKEN'] = cfg.jungleToken;
-    const args = buildRunArgs(userId, image, env);
-    // Try to remove any existing container with same name
-    await pexec('docker', ['rm', '-f', name]).catch(() => {});
-    await pexec('docker', args);
-    // Inspect to get host port
-    const { stdout } = await pexec('docker', ['inspect', name]);
-    const hostPort = parseInspectHostPort(JSON.parse(stdout));
-    if (!hostPort) throw new Error('FailedInspectPort');
-    return { baseUrl: `http://127.0.0.1:${hostPort}` };
+    // Reuse existing container if present; otherwise run a new one
+    let stdout: string;
+    let foundPort: number | null = null;
+    try {
+      ({ stdout } = await pexec('docker', ['inspect', name]));
+      foundPort = parseInspectHostPort(JSON.parse(stdout));
+    } catch {}
+    if (!foundPort) {
+      const args = buildRunArgs(userId, image, env);
+      await pexec('docker', args);
+      ({ stdout } = await pexec('docker', ['inspect', name]));
+      foundPort = parseInspectHostPort(JSON.parse(stdout));
+    }
+    if (!foundPort) throw new Error('FailedInspectPort');
+    return { baseUrl: `http://127.0.0.1:${foundPort}` };
   }
   async stop(_userId: string): Promise<void> {
     const name = `jungle-${_userId}`;

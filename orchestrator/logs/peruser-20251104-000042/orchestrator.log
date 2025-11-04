@@ -1,0 +1,19 @@
+orchestrator-1  | orchestrator listening on http://0.0.0.0:8080
+orchestrator-1  | {"level":"info","msg":"ingress","ts":"2025-11-04T05:00:50.166Z","source":"curl","action":"initialize","path":"/mcp","has_session_header":false,"content_type":"application/json"}
+orchestrator-1  | {"level":"info","msg":"upstream_call","ts":"2025-11-04T05:00:50.166Z","source":"curl","target":"jungle","action":"initialize"}
+orchestrator-1  | {"level":"info","msg":"upstream_ok","ts":"2025-11-04T05:00:50.207Z","source":"curl","action":"initialize","status":200}
+orchestrator-1  | {"level":"info","msg":"ingress","ts":"2025-11-04T05:00:50.223Z","source":"curl","action":"tools/list","path":"/mcp","has_session_header":false,"content_type":"application/json"}
+orchestrator-1  | {"level":"info","msg":"upstream_call","ts":"2025-11-04T05:00:50.224Z","source":"curl","target":"jungle","action":"tools/list"}
+orchestrator-1  | {"level":"info","msg":"relay_stream","ts":"2025-11-04T05:00:50.227Z","source":"curl","action":"tools/list","status":200}
+orchestrator-1  | {"level":"info","msg":"ingress","ts":"2025-11-04T05:00:50.253Z","source":"curl","action":"initialize","path":"/mcp","has_session_header":false,"content_type":"application/json"}
+orchestrator-1  | {"level":"info","msg":"upstream_call","ts":"2025-11-04T05:00:50.253Z","source":"curl","target":"jungle","action":"initialize"}
+orchestrator-1  | {"level":"info","msg":"upstream_ok","ts":"2025-11-04T05:00:50.256Z","source":"curl","action":"initialize","status":200}
+orchestrator-1  | {"level":"info","msg":"ingress","ts":"2025-11-04T05:00:50.270Z","source":"curl","action":"tools/list","path":"/mcp","has_session_header":false,"content_type":"application/json"}
+orchestrator-1  | {"level":"info","msg":"upstream_call","ts":"2025-11-04T05:00:50.270Z","source":"curl","target":"jungle","action":"tools/list"}
+orchestrator-1  | {"level":"info","msg":"relay_stream","ts":"2025-11-04T05:00:50.273Z","source":"curl","action":"tools/list","status":200}
+orchestrator-1  | {"level":"info","msg":"ingress","ts":"2025-11-04T05:00:52.215Z","source":"curl","action":"initialize","path":"/mcp","has_session_header":false,"content_type":"application/json"}
+orchestrator-1  | {"level":"info","msg":"upstream_call","ts":"2025-11-04T05:00:52.215Z","source":"curl","target":"jungle","action":"initialize"}
+orchestrator-1  | {"level":"info","msg":"upstream_ok","ts":"2025-11-04T05:00:52.219Z","source":"curl","action":"initialize","status":200}
+orchestrator-1  | {"level":"info","msg":"ingress","ts":"2025-11-04T05:00:52.237Z","source":"curl","action":"tools/list","path":"/mcp","has_session_header":false,"content_type":"application/json"}
+orchestrator-1  | {"level":"info","msg":"upstream_call","ts":"2025-11-04T05:00:52.238Z","source":"curl","target":"jungle","action":"tools/list"}
+orchestrator-1  | {"level":"info","msg":"relay_stream","ts":"2025-11-04T05:00:52.240Z","source":"curl","action":"tools/list","status":200}

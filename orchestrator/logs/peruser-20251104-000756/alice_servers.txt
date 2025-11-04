@@ -1,0 +1,6 @@
+TIP: You can set `registry_url: http://127.0.0.1:55006` in /Users/adam/.mcpjungle.conf to avoid setting the --registry flag every time.
+
+1. context7
+Context7
+Transport: streamable_http
+URL: https://mcp.context7.com/mcp

@@ -1,0 +1,3 @@
+TIP: You can set `registry_url: http://127.0.0.1:55008` in /Users/adam/.mcpjungle.conf to avoid setting the --registry flag every time.
+
+failed to register server: failed to register mcp server: constraint failed: UNIQUE constraint failed: mcp_servers.name (2067)
