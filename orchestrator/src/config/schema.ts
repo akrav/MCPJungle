@@ -66,6 +66,8 @@ export const configSchema = z.object({
     .url({ message: 'SUPABASE_URL must be a valid URL' })
     .optional(),
   SUPABASE_KEY: z.string().optional(),
+  // OpenAI configuration for embeddings and query expansion
+  OPENAI_API_KEY: z.string().optional(),
 });
 
 export type OrchestratorConfig = {
@@ -88,4 +90,6 @@ export type OrchestratorConfig = {
   // Supabase configuration for tool discovery
   supabaseUrl?: string;
   supabaseKey?: string;
+  // OpenAI configuration for embeddings
+  openaiApiKey?: string;
 };

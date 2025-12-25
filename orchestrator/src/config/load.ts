@@ -22,6 +22,7 @@ export function loadConfig(
     JUNGLE_HEALTH_BACKOFF_MS: env.JUNGLE_HEALTH_BACKOFF_MS,
     SUPABASE_URL: env.SUPABASE_URL,
     SUPABASE_KEY: env.SUPABASE_KEY,
+    OPENAI_API_KEY: env.OPENAI_API_KEY,
   });
   if (!parsed.success) {
     const msg = parsed.error.issues
@@ -49,5 +50,6 @@ export function loadConfig(
     jungleHealthBackoffMs: data.JUNGLE_HEALTH_BACKOFF_MS,
     supabaseUrl: data.SUPABASE_URL,
     supabaseKey: data.SUPABASE_KEY,
+    openaiApiKey: data.OPENAI_API_KEY,
   };
 }

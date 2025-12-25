@@ -53,3 +53,30 @@ export {
   PreferencesStoreError,
 } from './preferences/store.js';
 
+// Search service (vector search, query expansion, embeddings)
+export {
+  // Main search functions
+  searchTools,
+  searchToolsByEmbedding,
+  getSearchServiceStatus,
+  SearchServiceError,
+  // Embedding functions
+  generateEmbedding,
+  generateEmbeddings,
+  isEmbeddingConfigured,
+  EmbeddingError,
+  EMBEDDING_DIMENSION,
+  DEFAULT_MODEL,
+  // Query expansion functions
+  expandQuery,
+  isQueryExpansionConfigured,
+  QueryExpansionError,
+  EXPANSION_SYSTEM_PROMPT,
+  // Vector store functions
+  findSimilarTools,
+  hasEmbeddings,
+  storeToolEmbedding,
+  getEmbeddingCount,
+  VectorSearchError,
+  VECTOR_SEARCH_DEFAULTS,
+} from './search/index.js';
