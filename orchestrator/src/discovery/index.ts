@@ -1,0 +1,55 @@
+/**
+ * Discovery Module
+ *
+ * Exports for the tool discovery system that integrates with Supabase
+ * for finding and managing MCP tools.
+ *
+ * @module discovery
+ */
+
+// Supabase client
+export {
+  initializeSupabaseClient,
+  getSupabaseClient,
+  isSupabaseConfigured,
+  resetSupabaseClient,
+  SupabaseConfig,
+  SupabaseConfigError,
+} from './supabase/client.js';
+
+// Supabase types
+export {
+  Tool,
+  ToolSummary,
+  ToolWithScore,
+  ListingStatus,
+} from './supabase/types.js';
+
+// Supabase service
+export {
+  getAllTools,
+  getActiveTools,
+  getToolById,
+  getToolsByName,
+  SupabaseServiceError,
+} from './supabase/service.js';
+
+// User preferences types
+export {
+  UserPreferences,
+  UserPreferencesUpdate,
+  DiscoveryMode,
+  SortStrategy,
+  DEFAULT_USER_PREFERENCES,
+} from './preferences/types.js';
+
+// User preferences store
+export {
+  getUserPreferences,
+  setUserPreferences,
+  updateUserPreferences,
+  deleteUserPreferences,
+  hasCustomPreferences,
+  PreferencesStoreError,
+} from './preferences/store.js';
+

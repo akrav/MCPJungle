@@ -20,6 +20,8 @@ export function loadConfig(
     PROVISION_ON_DEMAND: env.PROVISION_ON_DEMAND,
     JUNGLE_HEALTH_TIMEOUT_MS: env.JUNGLE_HEALTH_TIMEOUT_MS,
     JUNGLE_HEALTH_BACKOFF_MS: env.JUNGLE_HEALTH_BACKOFF_MS,
+    SUPABASE_URL: env.SUPABASE_URL,
+    SUPABASE_KEY: env.SUPABASE_KEY,
   });
   if (!parsed.success) {
     const msg = parsed.error.issues
@@ -45,5 +47,7 @@ export function loadConfig(
     provisionOnDemand: data.PROVISION_ON_DEMAND,
     jungleHealthTimeoutMs: data.JUNGLE_HEALTH_TIMEOUT_MS,
     jungleHealthBackoffMs: data.JUNGLE_HEALTH_BACKOFF_MS,
+    supabaseUrl: data.SUPABASE_URL,
+    supabaseKey: data.SUPABASE_KEY,
   };
 }

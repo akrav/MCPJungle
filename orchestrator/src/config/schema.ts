@@ -60,6 +60,12 @@ export const configSchema = z.object({
     .optional()
     .transform((v) => (v && v.trim() !== '' ? parseInt(v, 10) : 250))
     .pipe(z.number().int().positive()),
+  // Supabase configuration for tool discovery
+  SUPABASE_URL: z
+    .string()
+    .url({ message: 'SUPABASE_URL must be a valid URL' })
+    .optional(),
+  SUPABASE_KEY: z.string().optional(),
 });
 
 export type OrchestratorConfig = {
@@ -79,4 +85,7 @@ export type OrchestratorConfig = {
   provisionOnDemand: boolean;
   jungleHealthTimeoutMs: number;
   jungleHealthBackoffMs: number;
+  // Supabase configuration for tool discovery
+  supabaseUrl?: string;
+  supabaseKey?: string;
 };
