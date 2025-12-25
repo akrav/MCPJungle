@@ -110,7 +110,7 @@ describe('Query Expansion', () => {
       expect(body.messages[1].content).toContain('test query');
     });
 
-    it('uses gpt-4.1-nano model by default', async () => {
+    it('uses gpt-5-nano model by default', async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
         json: async () => ({
@@ -127,7 +127,7 @@ describe('Query Expansion', () => {
       await expandQuery('test');
 
       const body = JSON.parse(mockFetch.mock.calls[0][1].body);
-      expect(body.model).toBe('gpt-4.1-nano-2025-04-14');
+      expect(body.model).toBe('gpt-5-nano');
     });
 
     it('sets low temperature for focused output', async () => {

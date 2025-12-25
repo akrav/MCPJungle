@@ -80,3 +80,34 @@ export {
   VectorSearchError,
   VECTOR_SEARCH_DEFAULTS,
 } from './search/index.js';
+
+// Selection service (filtering and ranking)
+export {
+  // Main selection functions
+  selectBestTool,
+  getAutoSelectedTool,
+  getManualCandidates,
+  hasViableCandidates,
+  describeFiltering,
+  SelectionResult,
+  SelectionOptions,
+  SelectableTool,
+  // Filter functions
+  filterTools,
+  passesPriceFilter,
+  passesRatingFilter,
+  getFilterStats,
+  FilterOptions,
+  FilterableTool,
+  DEFAULT_FILTER_OPTIONS,
+  // Ranking functions
+  rankTools,
+  getBestTool,
+  getTopRanked,
+  getComparator,
+  compareByPriceAsc,
+  compareByRatingDesc,
+  compareByBalancedScore,
+  calculateBalancedScore,
+  RankableTool,
+} from './selection/index.js';
