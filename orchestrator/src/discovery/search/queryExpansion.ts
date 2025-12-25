@@ -81,7 +81,7 @@ export function getQueryExpansionConfig(): QueryExpansionConfig {
 
   return {
     apiKey: cfg.openaiApiKey,
-    model: 'gpt-4o-mini', // Fast and cheap for query expansion
+    model: 'gpt-4.1-nano-2025-04-14', // Fast and cheap for query expansion
     baseUrl: 'https://api.openai.com/v1',
     maxTokens: 300,
   };
@@ -121,7 +121,7 @@ Describe the ideal MCP tool that would solve this.`;
         Authorization: `Bearer ${cfg.apiKey}`,
       },
       body: JSON.stringify({
-        model: cfg.model || 'gpt-4o-mini',
+        model: cfg.model || 'gpt-4.1-nano-2025-04-14',
         messages: [
           { role: 'system', content: EXPANSION_SYSTEM_PROMPT },
           { role: 'user', content: userPrompt },
