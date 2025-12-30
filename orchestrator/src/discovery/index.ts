@@ -130,6 +130,32 @@ export {
   InstallableTool,
 } from './provisioning/index.js';
 
+// Interaction service (manual mode)
+export {
+  // Pending state management
+  storePendingChoices,
+  getPendingChoices,
+  clearPendingChoices,
+  getPendingChoicesForUser,
+  hasPendingChoices,
+  getPendingCount,
+  clearAllPendingChoices,
+  generateRequestId,
+  configurePendingState,
+  resetPendingStateConfig,
+  PendingSelection,
+  PendingTool,
+  // User prompts
+  requestUserSelection,
+  formatToolTable,
+  configurePrompt,
+  resetPromptConfig,
+  notifySelectionMade,
+  notifySelectionRejected,
+  notifySelectionExpired,
+  PromptResult,
+} from './interaction/index.js';
+
 // =============================================================================
 // AUTO-INSTALL FLOW - Main Entry Point
 // =============================================================================
@@ -141,6 +167,11 @@ import { installTool, InstallResult } from './provisioning/index.js';
 import { ToolWithScore } from './supabase/types.js';
 import { UserPreferences } from './preferences/types.js';
 import { log } from '../obs/log.js';
+import {
+  storePendingChoices,
+  generateRequestId,
+  requestUserSelection,
+} from './interaction/index.js';
 
 /**
  * Result of the auto-install resolution process
@@ -156,6 +187,8 @@ export interface ResolveResult {
   candidates: ToolWithScore[];
   /** Installation result (if installed) */
   installResult: InstallResult | null;
+  /** Request ID for manual mode (used to reference pending selection) */
+  requestId?: string;
   /** Error message (if failed) */
   error?: string;
 }
@@ -259,12 +292,23 @@ export async function resolveMissingTool(
 
     // Check if manual mode
     if (selection.mode === 'manual') {
+      const requestId = generateRequestId();
+
       log('info', 'resolve_manual_mode', {
         userId,
+        requestId,
         candidateCount: selection.candidates.length,
       });
+
+      // Store pending choices for later selection
+      storePendingChoices(requestId, userId, query, selection.candidates);
+
+      // Output prompt to user
+      requestUserSelection(requestId, selection.candidates, query);
+
       result.manualMode = true;
-      result.error = 'Manual mode: User selection required';
+      result.requestId = requestId;
+      result.error = `Manual mode: User selection required. Request ID: ${requestId}`;
       return result;
     }
 
