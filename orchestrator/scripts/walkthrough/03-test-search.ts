@@ -125,7 +125,9 @@ async function main() {
       
       results.forEach((tool, i) => {
         const name = tool.name.substring(0, 26).padEnd(26);
-        const sim = `${(tool.similarity_score * 100).toFixed(1)}%`.padEnd(10);
+        // The RPC returns 'similarity' not 'similarity_score'
+        const simValue = (tool as any).similarity ?? (tool as any).similarity_score ?? 0;
+        const sim = `${(simValue * 100).toFixed(1)}%`.padEnd(10);
         const price = `$${tool.price_per_call.toFixed(4)}`.padEnd(14);
         console.log(`   │ ${(i + 1).toString().padEnd(1)} │ ${name} │ ${sim} │ ${price} │`);
       });
@@ -150,12 +152,14 @@ async function main() {
     console.log(`   ✅ searchTools("${query}") returned ${fullResults.length} results`);
     console.log(`\n   ⏱️  Total Pipeline Time: ${fullTime}ms`);
     
-    if (fullResults.length > 0) {
+    if (fullResults && fullResults.length > 0) {
+      const topResult = fullResults[0] as any;
+      const simValue = topResult.similarity ?? topResult.similarity_score ?? 0;
       console.log('\n   Top Result:');
-      console.log(`     Name: ${fullResults[0].name}`);
-      console.log(`     ID: ${fullResults[0].id}`);
-      console.log(`     Similarity: ${(fullResults[0].similarity_score * 100).toFixed(1)}%`);
-      console.log(`     Price: $${fullResults[0].price_per_call.toFixed(4)}/call`);
+      console.log(`     Name: ${topResult.name}`);
+      console.log(`     ID: ${topResult.id}`);
+      console.log(`     Similarity: ${(simValue * 100).toFixed(1)}%`);
+      console.log(`     Price: $${topResult.price_per_call.toFixed(4)}/call`);
     }
   } catch (error) {
     console.error('   ❌ Full pipeline failed:', (error as Error).message);
