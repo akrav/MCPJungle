@@ -1406,6 +1406,1059 @@ npm test -- tests/sprint4-5/e2e_auto_mode.spec.ts
 
 ---
 
+## 11. Complete End-to-End Pipeline: All Paths Explained
+
+This section provides a comprehensive walkthrough of **every possible path** a request can take through MCPJungle, from the moment an AI agent makes a request to the final response. It also identifies the **exact code locations** where Lambda or other infrastructure can be integrated.
+
+### 11.1 The Master Flow Diagram
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                                    COMPLETE MCPJUNGLE PIPELINE                                      │
+│                                                                                                     │
+│  This diagram shows EVERY path a request can take through the system                                │
+└─────────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+                                         ┌─────────────┐
+                                         │  AI AGENT   │
+                                         │ (Claude,GPT)│
+                                         └──────┬──────┘
+                                                │
+                                    POST /mcp + X-User-Id header
+                                    { method: "tools/call", params: { name: "weather__forecast" } }
+                                                │
+                                                ▼
+┌───────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                                    ORCHESTRATOR (Entry Point)                                         │
+│                                    orchestrator/src/server/http.ts                                    │
+│                                                                                                       │
+│  ┌─────────────────────────────────────────────────────────────────────────────────────────────────┐  │
+│  │ STEP 1: VALIDATE & EXTRACT                                                                      │  │
+│  │ • Parse JSON-RPC body                                                                           │  │
+│  │ • Extract userId from X-User-Id header                                                          │  │
+│  │ • Apply rate limiting                                                                           │  │
+│  │ • Check method is allowed (tools/call, tools/list, initialize, cancel)                          │  │
+│  └─────────────────────────────────────────────────────────────────────────────────────────────────┘  │
+│                                                │                                                      │
+│                                                ▼                                                      │
+│  ┌─────────────────────────────────────────────────────────────────────────────────────────────────┐  │
+│  │ STEP 2: ROUTE RESOLUTION                                                                        │  │
+│  │ orchestrator/src/routing/router.ts → resolveJungleEndpoint({ userId })                          │  │
+│  │                                                                                                 │  │
+│  │                            ┌──────────────────────────┐                                         │  │
+│  │                            │  What's the ROUTING_MODE? │                                        │  │
+│  │                            └────────────┬─────────────┘                                         │  │
+│  │                                         │                                                       │  │
+│  │              ┌──────────────────────────┼──────────────────────────┐                            │  │
+│  │              ▼                          ▼                          ▼                            │  │
+│  │   ┌─────────────────────┐    ┌─────────────────────┐    ┌─────────────────────┐                 │  │
+│  │   │   MODE: shared      │    │   MODE: per_user    │    │  MODE: per_user     │                 │  │
+│  │   │                     │    │   (existing user)   │    │  (NEW user)         │                 │  │
+│  │   │ Return config's     │    │                     │    │                     │                 │  │
+│  │   │ JUNGLE_URL          │    │ Lookup in store:    │    │ PROVISION ON DEMAND │                 │  │
+│  │   │                     │    │ store.get(userId)   │    │                     │                 │  │
+│  │   │ baseUrl: "http://   │    │ → found!            │    │ 🔌 INTEGRATION      │                 │  │
+│  │   │ localhost:9000"     │    │                     │    │    POINT #1         │                 │  │
+│  │   │                     │    │ baseUrl: "http://   │    │                     │                 │  │
+│  │   └─────────────────────┘    │ localhost:54321"    │    │ getProvisioner()    │                 │  │
+│  │                              └─────────────────────┘    │ .provision(userId)  │                 │  │
+│  │                                                         │                     │                 │  │
+│  │                                                         │ Docker/K8s/Lambda   │                 │  │
+│  │                                                         └─────────────────────┘                 │  │
+│  └─────────────────────────────────────────────────────────────────────────────────────────────────┘  │
+│                                                │                                                      │
+│                                      RouteDecision: { baseUrl, mode }                                 │
+│                                                │                                                      │
+│                                                ▼                                                      │
+│  ┌─────────────────────────────────────────────────────────────────────────────────────────────────┐  │
+│  │ STEP 3: FORWARD TO JUNGLE                                                                       │  │
+│  │ orchestrator/src/server/upstream.ts → postToJungle(body, { baseUrl })                           │  │
+│  └─────────────────────────────────────────────────────────────────────────────────────────────────┘  │
+└───────────────────────────────────────────────────────────────────────────────────────────────────────┘
+                                                │
+                                                ▼
+┌───────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                                    JUNGLE (Go Registry Server)                                        │
+│                                    internal/api/server.go → /mcp endpoint                             │
+│                                                                                                       │
+│  ┌─────────────────────────────────────────────────────────────────────────────────────────────────┐  │
+│  │ STEP 4: MCP SERVER PROCESSES REQUEST                                                            │  │
+│  │ The mcp-go library parses the JSON-RPC and invokes the registered handler                       │  │
+│  │                                                                                                 │  │
+│  │ internal/service/mcp/proxy.go → MCPProxyToolCallHandler(request)                                │  │
+│  │                                                                                                 │  │
+│  │  1. Parse tool name: "weather__forecast" → server="weather", tool="forecast"                    │  │
+│  │  2. Look up server config from SQLite: db.Where("name = ?", "weather")                          │  │
+│  │                                                                                                 │  │
+│  │                            ┌─────────────────────────────┐                                      │  │
+│  │                            │  Is server "weather" found? │                                      │  │
+│  │                            └──────────────┬──────────────┘                                      │  │
+│  │                                           │                                                     │  │
+│  │              ┌────────────────────────────┼────────────────────────────┐                        │  │
+│  │              ▼                                                         ▼                        │  │
+│  │   ┌─────────────────────────────┐                      ┌─────────────────────────────┐          │  │
+│  │   │         YES - FOUND         │                      │         NO - NOT FOUND      │          │  │
+│  │   │                             │                      │                             │          │  │
+│  │   │  Continue to connect...     │                      │  Return JSON-RPC Error:     │          │  │
+│  │   │                             │                      │  {                          │          │  │
+│  │   │  See STEP 5                 │                      │    error: {                 │          │  │
+│  │   │                             │                      │      code: -32601,          │          │  │
+│  │   │                             │                      │      message: "Method       │          │  │
+│  │   │                             │                      │               not found"    │          │  │
+│  │   │                             │                      │    }                        │          │  │
+│  │   │                             │                      │  }                          │          │  │
+│  │   └──────────────┬──────────────┘                      └──────────────┬──────────────┘          │  │
+│  │                  │                                                    │                         │  │
+│  │                  │                                                    │                         │  │
+│  │                  ▼                                                    │                         │  │
+│  │   ┌─────────────────────────────┐                                     │                         │  │
+│  │   │ STEP 5: CONNECT TO UPSTREAM │                                     │                         │  │
+│  │   │ internal/service/mcp/util.go│                                     │                         │  │
+│  │   │                             │                                     │                         │  │
+│  │   │ newMcpServerSession(server) │                                     │                         │  │
+│  │   │                             │                                     │                         │  │
+│  │   │ Based on server.Transport:  │                                     │                         │  │
+│  │   │ • http → HTTP connection    │                                     │                         │  │
+│  │   │ • stdio → spawn subprocess  │                                     │                         │  │
+│  │   │ • sse → SSE connection      │                                     │                         │  │
+│  │   │                             │                                     │                         │  │
+│  │   │ 🔌 INTEGRATION POINT #2     │                                     │                         │  │
+│  │   │ Add: lambda → invoke Lambda │                                     │                         │  │
+│  │   └──────────────┬──────────────┘                                     │                         │  │
+│  │                  │                                                    │                         │  │
+│  │                  ▼                                                    │                         │  │
+│  │   ┌─────────────────────────────┐                                     │                         │  │
+│  │   │ STEP 6: CALL UPSTREAM TOOL  │                                     │                         │  │
+│  │   │                             │                                     │                         │  │
+│  │   │ mcpClient.CallTool(request) │                                     │                         │  │
+│  │   │                             │                                     │                         │  │
+│  │   │ → Upstream executes tool    │                                     │                         │  │
+│  │   │ → Returns result            │                                     │                         │  │
+│  │   └──────────────┬──────────────┘                                     │                         │  │
+│  │                  │                                                    │                         │  │
+│  │                  │                                                    │                         │  │
+│  └──────────────────┼────────────────────────────────────────────────────┼─────────────────────────┘  │
+│                     │                                                    │                            │
+│                     ▼                                                    ▼                            │
+│            ┌────────────────┐                                 ┌────────────────┐                      │
+│            │ SUCCESS RESULT │                                 │ ERROR RESPONSE │                      │
+│            └────────┬───────┘                                 └────────┬───────┘                      │
+│                     │                                                  │                              │
+└─────────────────────┼──────────────────────────────────────────────────┼──────────────────────────────┘
+                      │                                                  │
+                      │              ┌───────────────────────────────────┘
+                      │              │
+                      │              ▼
+                      │   ┌─────────────────────────────────────────────────────────────────────────────┐
+                      │   │                    ORCHESTRATOR: INTERCEPT ERROR                            │
+                      │   │                    orchestrator/src/server/interceptor.ts                   │
+                      │   │                                                                             │
+                      │   │   ┌───────────────────────────────────────────────────────────────────────┐ │
+                      │   │   │  Is this a "Method not found" error? (code: -32601)                   │ │
+                      │   │   │                                                                       │ │
+                      │   │   │  if (error.code === -32601) → TRIGGER DISCOVERY                       │ │
+                      │   │   └───────────────────────────────────────────────────────────────────────┘ │
+                      │   │                              │                                              │
+                      │   │                              ▼                                              │
+                      │   │   ┌───────────────────────────────────────────────────────────────────────┐ │
+                      │   │   │                       DISCOVERY PIPELINE                              │ │
+                      │   │   │                       orchestrator/src/discovery/index.ts             │ │
+                      │   │   │                       resolveMissingTool(userId, query)               │ │
+                      │   │   │                                                                       │ │
+                      │   │   │  See Section 11.2 for full discovery flow...                         │ │
+                      │   │   │                                                                       │ │
+                      │   │   │  Result: { resolved: true/false, manualMode: true/false, ... }        │ │
+                      │   │   └───────────────────────────────────────────────────────────────────────┘ │
+                      │   │                              │                                              │
+                      │   │              ┌───────────────┼───────────────┐                              │
+                      │   │              ▼               ▼               ▼                              │
+                      │   │   ┌──────────────────┐ ┌──────────────┐ ┌──────────────────┐                │
+                      │   │   │ RESOLVED: true   │ │ MANUAL MODE  │ │ NOT RESOLVED     │                │
+                      │   │   │                  │ │              │ │                  │                │
+                      │   │   │ Tool installed!  │ │ Waiting for  │ │ No tool found    │                │
+                      │   │   │ RETRY original   │ │ user input   │ │ Return error     │                │
+                      │   │   │ request          │ │              │ │ to AI agent      │                │
+                      │   │   └──────────────────┘ └──────────────┘ └──────────────────┘                │
+                      │   │                                                                             │
+                      │   └─────────────────────────────────────────────────────────────────────────────┘
+                      │
+                      ▼
+           ┌─────────────────────┐
+           │ RESPONSE TO AI AGENT│
+           │                     │
+           │ Success OR Error    │
+           └─────────────────────┘
+```
+
+---
+
+### 11.2 The Discovery Pipeline (When Tool is Missing)
+
+When the AI agent requests a tool that doesn't exist in the user's Jungle, the Discovery system kicks in:
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                                    DISCOVERY PIPELINE (Epic 4)                                      │
+│                                    orchestrator/src/discovery/                                      │
+└─────────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+  INPUT: User query "weather forecast" (extracted from the failed tool call)
+         User ID: "user-12345"
+
+                                           │
+                                           ▼
+┌─────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│ STEP D1: QUERY EXPANSION (HyDE Technique)                                                           │
+│ orchestrator/src/discovery/search/queryExpansion.ts                                                 │
+│                                                                                                     │
+│ WHY: "weather forecast" is vague. We ask an LLM to describe what an ideal tool would look like.     │
+│                                                                                                     │
+│ ┌─────────────────────────────────────────────────────────────────────────────────────────────────┐ │
+│ │ expandQuery(userQuery: string): Promise<string>                                                 │ │
+│ │                                                                                                 │ │
+│ │ Input: "weather forecast"                                                                       │ │
+│ │                                                                                                 │ │
+│ │ LLM Prompt (GPT-4o-mini):                                                                       │ │
+│ │   "You are a tool discovery assistant. Given a user's query about what they want to             │ │
+│ │    accomplish, generate an ideal tool description. Focus on: functionality, input/output,       │ │
+│ │    common use cases. Output ONLY the description, 2-4 sentences."                               │ │
+│ │                                                                                                 │ │
+│ │ Output: "A comprehensive weather forecasting API that provides current weather conditions,      │ │
+│ │          hourly and daily forecasts, severe weather alerts, and historical weather data.        │ │
+│ │          Supports lookups by city name, coordinates, and postal code. Returns temperature,      │ │
+│ │          humidity, precipitation, wind speed, and UV index."                                    │ │
+│ └─────────────────────────────────────────────────────────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────────────────────────────────────────────────────────┘
+                                           │
+                                           ▼
+┌─────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│ STEP D2: GENERATE EMBEDDING                                                                         │
+│ orchestrator/src/discovery/search/embedding.ts                                                      │
+│                                                                                                     │
+│ WHY: Convert text to a vector so we can do semantic similarity search.                              │
+│                                                                                                     │
+│ ┌─────────────────────────────────────────────────────────────────────────────────────────────────┐ │
+│ │ generateEmbedding(text: string): Promise<number[]>                                              │ │
+│ │                                                                                                 │ │
+│ │ Input: "A comprehensive weather forecasting API..."                                             │ │
+│ │                                                                                                 │ │
+│ │ OpenAI API: text-embedding-3-small                                                              │ │
+│ │                                                                                                 │ │
+│ │ Output: [0.023, -0.041, 0.089, -0.012, ... ] (1536 dimensions)                                  │ │
+│ │                                                                                                 │ │
+│ │ 🔌 INTEGRATION POINT #3: Replace with any embedding provider (Voyage AI, Cohere, local model)   │ │
+│ └─────────────────────────────────────────────────────────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────────────────────────────────────────────────────────┘
+                                           │
+                                           ▼
+┌─────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│ STEP D3: VECTOR SEARCH IN SUPABASE                                                                  │
+│ orchestrator/src/discovery/search/vectorStore.ts                                                    │
+│                                                                                                     │
+│ WHY: Find tools in our database whose descriptions are semantically similar to what user wants.     │
+│                                                                                                     │
+│ ┌─────────────────────────────────────────────────────────────────────────────────────────────────┐ │
+│ │ findSimilarTools(embedding: number[]): Promise<ToolWithScore[]>                                 │ │
+│ │                                                                                                 │ │
+│ │ Supabase RPC call:                                                                              │ │
+│ │   supabase.rpc('match_tools_orchestrator', {                                                    │ │
+│ │     query_embedding: [0.023, -0.041, ...],                                                      │ │
+│ │     match_threshold: 0.5,    // Minimum 50% similarity                                          │ │
+│ │     match_count: 10          // Top 10 results                                                  │ │
+│ │   })                                                                                            │ │
+│ │                                                                                                 │ │
+│ │ SQL Function (using pgvector cosine distance):                                                  │ │
+│ │   SELECT *, 1 - (embedding <=> query_embedding) AS similarity                                   │ │
+│ │   FROM tools t                                                                                  │ │
+│ │   JOIN tool_embeddings_orchestrator e ON t.id = e.tool_id                                       │ │
+│ │   WHERE similarity > 0.5                                                                        │ │
+│ │   ORDER BY similarity DESC                                                                      │ │
+│ │   LIMIT 10;                                                                                     │ │
+│ │                                                                                                 │ │
+│ │ Output:                                                                                         │ │
+│ │   [                                                                                             │ │
+│ │     { id: "uuid-1", name: "Weather API Pro", similarity: 0.91, price_per_call: 0.005, ...},     │ │
+│ │     { id: "uuid-2", name: "Climate Data Svc", similarity: 0.78, price_per_call: 0.001, ...},    │ │
+│ │     { id: "uuid-3", name: "Storm Tracker", similarity: 0.65, price_per_call: 0.010, ...},       │ │
+│ │   ]                                                                                             │ │
+│ └─────────────────────────────────────────────────────────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────────────────────────────────────────────────────────┘
+                                           │
+                         3 tools found with similarity > 50%
+                                           │
+                                           ▼
+┌─────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│ STEP D4: APPLY USER FILTERS                                                                         │
+│ orchestrator/src/discovery/selection/filters.ts                                                     │
+│                                                                                                     │
+│ WHY: Respect the user's budget and quality constraints.                                             │
+│                                                                                                     │
+│ ┌─────────────────────────────────────────────────────────────────────────────────────────────────┐ │
+│ │ First, get user preferences from Supabase:                                                      │ │
+│ │                                                                                                 │ │
+│ │ getUserPreferences(userId): Promise<UserPreferences>                                            │ │
+│ │                                                                                                 │ │
+│ │ User "user-12345" preferences (from user_preferences_orchestrator table):                       │ │
+│ │   {                                                                                             │ │
+│ │     discovery_mode: "auto",                                                                     │ │
+│ │     auto_install_strategy: "balanced",                                                          │ │
+│ │     max_price_cap: 0.008,        // Max $0.008 per call                                         │ │
+│ │     min_rating_threshold: 3.5    // Min 3.5 stars                                               │ │
+│ │   }                                                                                             │ │
+│ │                                                                                                 │ │
+│ │ Then filter tools:                                                                              │ │
+│ │                                                                                                 │ │
+│ │ filterTools(tools, preferences):                                                                │ │
+│ │   • Weather API Pro:  price=0.005 ✓, rating=4.5 ✓  → KEEP                                       │ │
+│ │   • Climate Data Svc: price=0.001 ✓, rating=3.2 ✗  → REMOVE (rating too low)                    │ │
+│ │   • Storm Tracker:    price=0.010 ✗, rating=4.8    → REMOVE (too expensive)                     │ │
+│ │                                                                                                 │ │
+│ │ Result: 1 tool passes filters                                                                   │ │
+│ └─────────────────────────────────────────────────────────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────────────────────────────────────────────────────────┘
+                                           │
+                                    1 tool passes filters
+                                           │
+                                           ▼
+┌─────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│ STEP D5: RANK REMAINING TOOLS                                                                       │
+│ orchestrator/src/discovery/selection/ranking.ts                                                     │
+│                                                                                                     │
+│ WHY: If multiple tools pass, pick the best one based on user's strategy.                            │
+│                                                                                                     │
+│ ┌─────────────────────────────────────────────────────────────────────────────────────────────────┐ │
+│ │ rankTools(tools, strategy: "balanced"):                                                         │ │
+│ │                                                                                                 │ │
+│ │ Strategies:                                                                                     │ │
+│ │   • "cheapest": Sort by price ascending                                                         │ │
+│ │   • "rating": Sort by rating descending                                                         │ │
+│ │   • "balanced": score = (rating/5 × 0.6) + ((1 - price/0.01) × 0.4)                             │ │
+│ │                                                                                                 │ │
+│ │ Weather API Pro:                                                                                │ │
+│ │   balanced_score = (4.5/5 × 0.6) + ((1 - 0.005/0.01) × 0.4)                                     │ │
+│ │                  = 0.54 + 0.20 = 0.74                                                           │ │
+│ │                                                                                                 │ │
+│ │ Result: Weather API Pro is the top-ranked tool                                                  │ │
+│ └─────────────────────────────────────────────────────────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────────────────────────────────────────────────────────┘
+                                           │
+                                           ▼
+┌─────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│ STEP D6: MODE DECISION                                                                              │
+│ orchestrator/src/discovery/selection/index.ts → selectBestTool()                                    │
+│                                                                                                     │
+│ ┌─────────────────────────────────────────────────────────────────────────────────────────────────┐ │
+│ │                        ┌─────────────────────────────────────┐                                  │ │
+│ │                        │ What is discovery_mode?             │                                  │ │
+│ │                        └───────────────┬─────────────────────┘                                  │ │
+│ │                                        │                                                        │ │
+│ │                    ┌───────────────────┼───────────────────┐                                    │ │
+│ │                    ▼                                       ▼                                    │ │
+│ │         ┌─────────────────────┐                 ┌─────────────────────┐                         │ │
+│ │         │   MODE: "auto"      │                 │   MODE: "manual"    │                         │ │
+│ │         │                     │                 │                     │                         │ │
+│ │         │ → Proceed to        │                 │ → Store candidates  │                         │ │
+│ │         │   install           │                 │   in pending state  │                         │ │
+│ │         │   automatically     │                 │                     │                         │ │
+│ │         │                     │                 │ → Prompt user to    │                         │ │
+│ │         │ See STEP D7         │                 │   select via        │                         │ │
+│ │         │                     │                 │   Admin API         │                         │ │
+│ │         └─────────────────────┘                 │                     │                         │ │
+│ │                                                 │ → Return:           │                         │ │
+│ │                                                 │   { manualMode:true │                         │ │
+│ │                                                 │     requestId:"..." │                         │ │
+│ │                                                 │   }                 │                         │ │
+│ │                                                 │                     │                         │ │
+│ │                                                 │ User calls:         │                         │ │
+│ │                                                 │ POST /admin/        │                         │ │
+│ │                                                 │   select-tool       │                         │ │
+│ │                                                 │ Then → STEP D7      │                         │ │
+│ │                                                 └─────────────────────┘                         │ │
+│ └─────────────────────────────────────────────────────────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────────────────────────────────────────────────────────┘
+                                           │
+                          MODE: "auto" → proceed to install
+                                           │
+                                           ▼
+┌─────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│ STEP D7: INSTALL TOOL                                                                               │
+│ orchestrator/src/discovery/provisioning/installer.ts                                                │
+│                                                                                                     │
+│ WHY: Save this tool subscription so user can use it in future requests.                             │
+│                                                                                                     │
+│ ┌─────────────────────────────────────────────────────────────────────────────────────────────────┐ │
+│ │ installTool(userId, tool):                                                                      │ │
+│ │                                                                                                 │ │
+│ │ 1. Generate canonical name:                                                                     │ │
+│ │    "Weather_API_Pro__a1b2c3d4" (name + first 8 chars of UUID)                                   │ │
+│ │                                                                                                 │ │
+│ │ 2. Save to Supabase (user_tools_orchestrator table):                                            │ │
+│ │    INSERT INTO user_tools_orchestrator (user_id, tool_id, canonical_name, is_active)            │ │
+│ │    VALUES ('user-12345', 'uuid-1', 'Weather_API_Pro__a1b2c3d4', true)                            │ │
+│ │    ON CONFLICT (user_id, tool_id) DO UPDATE SET is_active = true;                               │ │
+│ │                                                                                                 │ │
+│ │ 3. Refresh runtime (notify any callbacks):                                                      │ │
+│ │    refreshRuntime(userId, toolId) → calls registered callbacks                                  │ │
+│ │                                                                                                 │ │
+│ │ 🔌 INTEGRATION POINT #4: Lambda Provisioning Hook                                               │ │
+│ │    This is where you would:                                                                     │ │
+│ │    • Check tool's deployment_type (PUBLIC/PRIVATE)                                              │ │
+│ │    • If PRIVATE → spin up Lambda for this user                                                  │ │
+│ │    • Store Lambda ARN/URL in the database                                                       │ │
+│ │                                                                                                 │ │
+│ │ 4. Return success:                                                                              │ │
+│ │    { success: true, canonicalName: "Weather_API_Pro__a1b2c3d4", isNewInstall: true }            │ │
+│ └─────────────────────────────────────────────────────────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────────────────────────────────────────────────────────┘
+                                           │
+                              Tool installed successfully!
+                                           │
+                                           ▼
+┌─────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│ STEP D8: RETRY ORIGINAL REQUEST                                                                     │
+│ orchestrator/src/server/interceptor.ts                                                              │
+│                                                                                                     │
+│ WHY: Now that the tool is installed, try the original request again.                                │
+│                                                                                                     │
+│ ┌─────────────────────────────────────────────────────────────────────────────────────────────────┐ │
+│ │ processWithDiscovery():                                                                         │ │
+│ │                                                                                                 │ │
+│ │ if (result.resolved && result.installed) {                                                      │ │
+│ │   // Increment retry counter to prevent infinite loops                                          │ │
+│ │   retryContext.retryCount++;                                                                    │ │
+│ │                                                                                                 │ │
+│ │   // Re-dispatch the exact same original request                                                │ │
+│ │   return processWithDiscovery(originalRequest, userId, executeRequest);                         │ │
+│ │ }                                                                                               │ │
+│ │                                                                                                 │ │
+│ │ This time:                                                                                      │ │
+│ │   1. Request goes to Jungle again                                                               │ │
+│ │   2. Jungle now knows about "Weather_API_Pro__a1b2c3d4"                                          │ │
+│ │   3. Jungle connects to the tool's endpoint_url                                                 │ │
+│ │   4. Success! Weather data returned to AI agent                                                 │ │
+│ │                                                                                                 │ │
+│ │ 🔌 INTEGRATION POINT #5: Lambda Invocation                                                      │ │
+│ │    When Jungle tries to connect, check if tool has a Lambda endpoint:                           │ │
+│ │    • If endpoint_url starts with lambda:// → invoke Lambda function                             │ │
+│ │    • Pass the tool arguments to Lambda                                                          │ │
+│ │    • Return Lambda response                                                                     │ │
+│ └─────────────────────────────────────────────────────────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────────────────────────────────────────────────────────┘
+                                           │
+                                           ▼
+                              ┌─────────────────────────┐
+                              │   SUCCESS RESPONSE      │
+                              │   to AI Agent           │
+                              │                         │
+                              │   { weather: "sunny",   │
+                              │     temp: 72,           │
+                              │     humidity: 45% }     │
+                              └─────────────────────────┘
+```
+
+---
+
+### 11.3 All Possible Paths Summary
+
+Here's every possible path through the system:
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                            ALL POSSIBLE REQUEST PATHS                                               │
+├─────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                                     │
+│  PATH A: HAPPY PATH (Tool Already Exists)                                                           │
+│  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━                                                           │
+│  AI → Orchestrator → Jungle → Tool Found → Upstream Server → Response                               │
+│  Duration: ~100-500ms                                                                               │
+│                                                                                                     │
+│  PATH B: AUTO DISCOVERY (Tool Missing, Auto Mode)                                                   │
+│  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━                                                   │
+│  AI → Orchestrator → Jungle → NOT FOUND → Discovery Pipeline →                                      │
+│  Search Supabase → Filter → Rank → Auto Install → Retry → Success                                   │
+│  Duration: ~2-5 seconds (includes LLM calls)                                                        │
+│                                                                                                     │
+│  PATH C: MANUAL DISCOVERY (Tool Missing, Manual Mode)                                               │
+│  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━                                                  │
+│  AI → Orchestrator → Jungle → NOT FOUND → Discovery Pipeline →                                      │
+│  Search → Filter → Rank → Store Pending → Prompt User → WAIT →                                      │
+│  Admin API Call → Install → Retry → Success                                                         │
+│  Duration: Minutes to hours (waiting for human)                                                     │
+│                                                                                                     │
+│  PATH D: NO MATCH FOUND                                                                             │
+│  ━━━━━━━━━━━━━━━━━━━━━━━━━                                                                          │
+│  AI → Orchestrator → Jungle → NOT FOUND → Discovery Pipeline →                                      │
+│  Search → 0 results → Return Error                                                                  │
+│  Duration: ~1-2 seconds                                                                             │
+│                                                                                                     │
+│  PATH E: ALL FILTERED OUT                                                                           │
+│  ━━━━━━━━━━━━━━━━━━━━━━━━━━                                                                         │
+│  AI → Orchestrator → Jungle → NOT FOUND → Discovery Pipeline →                                      │
+│  Search → 5 results → Filter → 0 pass → Return Error                                                │
+│  Duration: ~1-2 seconds                                                                             │
+│                                                                                                     │
+│  PATH F: PER-USER PROVISIONING (New User)                                                           │
+│  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━                                                           │
+│  AI → Orchestrator → No Jungle for user → Provision Docker/K8s/Lambda →                             │
+│  Wait for healthy → Store mapping → Forward → Tool call → Success                                   │
+│  Duration: ~5-30 seconds (container startup)                                                        │
+│                                                                                                     │
+│  PATH G: CODEMODE EXECUTION                                                                         │
+│  ━━━━━━━━━━━━━━━━━━━━━━━━━━━                                                                        │
+│  AI → CodeMode → Run code in sandbox → Code calls tools →                                           │
+│  Each tool call: CodeMode → Jungle → Upstream → Back to sandbox                                     │
+│  Duration: Depends on code complexity                                                               │
+│                                                                                                     │
+└─────────────────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### 11.4 Complete Code Path with File Locations
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                        EXACT CODE EXECUTION PATH (with file:line references)                        │
+├─────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                                     │
+│  1. REQUEST ARRIVES                                                                                 │
+│     ├── orchestrator/src/server/http.ts                                                             │
+│     │   └── app.post('/mcp', ...) [line 56]                                                         │
+│     │                                                                                               │
+│  2. ROUTE RESOLUTION                                                                                │
+│     ├── orchestrator/src/routing/router.ts                                                          │
+│     │   └── resolveJungleEndpoint() [line 9]                                                        │
+│     │                                                                                               │
+│  3. PROVISIONING (if per_user + new)                                                                │
+│     ├── orchestrator/src/provisioning/types.ts                                                      │
+│     │   └── getProvisioner() [line 21]                                                              │
+│     ├── orchestrator/src/provisioning/docker.ts                                                     │
+│     │   └── DockerProvisioner.provision() [line 28]                                                 │
+│     │                                                                                               │
+│     │   🔌 INTEGRATION POINT #1: Add LambdaProvisioner here                                         │
+│     │      File: orchestrator/src/provisioning/lambda.ts (CREATE)                                   │
+│     │      Register in: orchestrator/src/provisioning/types.ts                                      │
+│     │                                                                                               │
+│  4. FORWARD TO JUNGLE                                                                               │
+│     ├── orchestrator/src/server/upstream.ts                                                         │
+│     │   └── postToJungle() [line 84]                                                                │
+│     │                                                                                               │
+│  5. JUNGLE RECEIVES                                                                                 │
+│     ├── internal/api/server.go                                                                      │
+│     │   └── setupRouter() → /mcp endpoint [line 181]                                                │
+│     │                                                                                               │
+│  6. MCP PROXY HANDLER                                                                               │
+│     ├── internal/service/mcp/proxy.go                                                               │
+│     │   └── MCPProxyToolCallHandler() [line 17]                                                     │
+│     │                                                                                               │
+│  7. CONNECT TO UPSTREAM                                                                             │
+│     ├── internal/service/mcp/util.go                                                                │
+│     │   └── newMcpServerSession() [line 279]                                                        │
+│     │                                                                                               │
+│     │   🔌 INTEGRATION POINT #2: Add Lambda transport here                                          │
+│     │      Add case "lambda": return createLambdaMcpServerConn(ctx, s)                              │
+│     │                                                                                               │
+│  8. ERROR: METHOD NOT FOUND (if tool missing)                                                       │
+│     ├── Response flows back to Orchestrator                                                         │
+│     │                                                                                               │
+│  9. INTERCEPT ERROR                                                                                 │
+│     ├── orchestrator/src/server/interceptor.ts                                                      │
+│     │   └── processWithDiscovery() [line 462]                                                       │
+│     │   └── isMethodNotFoundError() [line 119]                                                      │
+│     │                                                                                               │
+│  10. DISCOVERY PIPELINE                                                                             │
+│     ├── orchestrator/src/discovery/index.ts                                                         │
+│     │   └── resolveMissingTool() [line 222]                                                         │
+│     │                                                                                               │
+│  11. QUERY EXPANSION                                                                                │
+│     ├── orchestrator/src/discovery/search/queryExpansion.ts                                         │
+│     │   └── expandQuery() [line 85]                                                                 │
+│     │                                                                                               │
+│     │   🔌 INTEGRATION POINT #3: Replace embedding/expansion providers                              │
+│     │      Modify: getQueryExpansionConfig() for different LLM                                      │
+│     │                                                                                               │
+│  12. EMBEDDING GENERATION                                                                           │
+│     ├── orchestrator/src/discovery/search/embedding.ts                                              │
+│     │   └── generateEmbedding() [line 50]                                                           │
+│     │                                                                                               │
+│  13. VECTOR SEARCH                                                                                  │
+│     ├── orchestrator/src/discovery/search/vectorStore.ts                                            │
+│     │   └── findSimilarTools() [line 75]                                                            │
+│     │                                                                                               │
+│  14. GET USER PREFERENCES                                                                           │
+│     ├── orchestrator/src/discovery/preferences/store.ts                                             │
+│     │   └── getUserPreferences() [line 30]                                                          │
+│     │                                                                                               │
+│  15. FILTER & RANK                                                                                  │
+│     ├── orchestrator/src/discovery/selection/filters.ts                                             │
+│     │   └── filterTools() [line 65]                                                                 │
+│     ├── orchestrator/src/discovery/selection/ranking.ts                                             │
+│     │   └── rankTools() [line 45]                                                                   │
+│     │                                                                                               │
+│  16. MODE DECISION                                                                                  │
+│     ├── orchestrator/src/discovery/selection/index.ts                                               │
+│     │   └── selectBestTool() [line 90]                                                              │
+│     │                                                                                               │
+│  17. INSTALL TOOL                                                                                   │
+│     ├── orchestrator/src/discovery/provisioning/installer.ts                                        │
+│     │   └── installTool() [line 222]                                                                │
+│     │   └── persistToolConfig() [line 88]                                                           │
+│     │   └── refreshRuntime() [line 185]                                                             │
+│     │                                                                                               │
+│     │   🔌 INTEGRATION POINT #4: Lambda provisioning hook                                           │
+│     │      In installTool(), after persistToolConfig():                                             │
+│     │      - Check tool.deployment_type                                                             │
+│     │      - If PRIVATE: await lambdaProvisioner.provisionForUser(userId, tool)                     │
+│     │      - Store Lambda ARN in database                                                           │
+│     │                                                                                               │
+│  18. RETRY ORIGINAL REQUEST                                                                         │
+│     ├── orchestrator/src/server/interceptor.ts                                                      │
+│     │   └── processWithDiscovery() recursion [line 547]                                             │
+│     │                                                                                               │
+│  19. SUCCESS!                                                                                       │
+│     ├── Response flows back: Jungle → Orchestrator → AI Agent                                       │
+│                                                                                                     │
+└─────────────────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### 11.5 Lambda Integration Points (Detailed)
+
+Here are the **exact locations** where Lambda infrastructure should connect:
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                           LAMBDA INTEGRATION GUIDE                                                  │
+├─────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                                     │
+│  🔌 INTEGRATION POINT #1: User Instance Provisioning                                                │
+│  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━                                                │
+│                                                                                                     │
+│  WHEN: A new user needs their own isolated Jungle instance                                          │
+│  WHY: Per-user isolation using Lambda instead of Docker/K8s                                         │
+│                                                                                                     │
+│  FILE: orchestrator/src/provisioning/lambda.ts (CREATE NEW)                                         │
+│                                                                                                     │
+│  ```typescript                                                                                      │
+│  import { Provisioner } from './types.js';                                                          │
+│  import { LambdaClient, CreateFunctionCommand, InvokeCommand } from '@aws-sdk/client-lambda';       │
+│                                                                                                     │
+│  export class LambdaProvisioner implements Provisioner {                                            │
+│    private client: LambdaClient;                                                                    │
+│                                                                                                     │
+│    constructor(config: { region: string; s3Bucket: string; roleArn: string }) {                     │
+│      this.client = new LambdaClient({ region: config.region });                                     │
+│      this.s3Bucket = config.s3Bucket;                                                               │
+│      this.roleArn = config.roleArn;                                                                 │
+│    }                                                                                                │
+│                                                                                                     │
+│    async provision(userId: string): Promise<{ baseUrl: string }> {                                  │
+│      const functionName = `jungle-${userId}`;                                                       │
+│                                                                                                     │
+│      // Create Lambda function for this user                                                        │
+│      await this.client.send(new CreateFunctionCommand({                                             │
+│        FunctionName: functionName,                                                                  │
+│        Runtime: 'nodejs20.x',                                                                       │
+│        Handler: 'index.handler',                                                                    │
+│        Role: this.roleArn,                                                                          │
+│        Code: {                                                                                      │
+│          S3Bucket: this.s3Bucket,                                                                   │
+│          S3Key: 'jungle-lambda-package.zip',                                                        │
+│        },                                                                                           │
+│        Environment: {                                                                               │
+│          Variables: {                                                                               │
+│            USER_ID: userId,                                                                         │
+│            SUPABASE_URL: process.env.SUPABASE_URL,                                                  │
+│            SUPABASE_KEY: process.env.SUPABASE_KEY,                                                  │
+│          },                                                                                         │
+│        },                                                                                           │
+│        Timeout: 30,                                                                                 │
+│        MemorySize: 512,                                                                             │
+│      }));                                                                                           │
+│                                                                                                     │
+│      // Create API Gateway or Function URL                                                          │
+│      const apiUrl = await this.createFunctionUrl(functionName);                                     │
+│                                                                                                     │
+│      return { baseUrl: apiUrl };                                                                    │
+│    }                                                                                                │
+│                                                                                                     │
+│    async stop(userId: string): Promise<void> {                                                      │
+│      await this.client.send(new DeleteFunctionCommand({                                             │
+│        FunctionName: `jungle-${userId}`,                                                            │
+│      }));                                                                                           │
+│    }                                                                                                │
+│                                                                                                     │
+│    async isHealthy(baseUrl: string): Promise<boolean> {                                             │
+│      const response = await fetch(`${baseUrl}/health`);                                             │
+│      return response.ok;                                                                            │
+│    }                                                                                                │
+│  }                                                                                                  │
+│  ```                                                                                                │
+│                                                                                                     │
+│  REGISTER IN: orchestrator/src/provisioning/types.ts                                                │
+│                                                                                                     │
+│  ```typescript                                                                                      │
+│  export async function getProvisioner(): Promise<Provisioner> {                                     │
+│    const cfg = loadConfig(process.env);                                                             │
+│    switch (cfg.provisioner) {                                                                       │
+│      case 'lambda':                                                                                 │
+│        const { LambdaProvisioner } = await import('./lambda.js');                                   │
+│        return new LambdaProvisioner({                                                               │
+│          region: cfg.awsRegion,                                                                     │
+│          s3Bucket: cfg.lambdaS3Bucket,                                                              │
+│          roleArn: cfg.lambdaRoleArn,                                                                │
+│        });                                                                                          │
+│      // ... existing cases ...                                                                      │
+│    }                                                                                                │
+│  }                                                                                                  │
+│  ```                                                                                                │
+│                                                                                                     │
+├─────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                                     │
+│  🔌 INTEGRATION POINT #2: MCP Tool Transport                                                        │
+│  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━                                                        │
+│                                                                                                     │
+│  WHEN: An MCP tool is hosted on Lambda (not a traditional HTTP endpoint)                            │
+│  WHY: Some tools run as serverless functions                                                        │
+│                                                                                                     │
+│  FILE: internal/service/mcp/util.go                                                                 │
+│                                                                                                     │
+│  ```go                                                                                              │
+│  // Add new transport type                                                                          │
+│  // pkg/types/mcp_server.go                                                                         │
+│  const TransportLambda McpServerTransport = "lambda"                                                │
+│                                                                                                     │
+│  // Add Lambda config                                                                               │
+│  // internal/model/mcp_server.go                                                                    │
+│  type LambdaConfig struct {                                                                         │
+│      FunctionArn string `json:"function_arn"`                                                       │
+│      Region      string `json:"region"`                                                             │
+│  }                                                                                                  │
+│                                                                                                     │
+│  // Add Lambda connection                                                                           │
+│  // internal/service/mcp/util.go                                                                    │
+│  func newMcpServerSession(ctx context.Context, s *model.McpServer) (*client.Client, error) {        │
+│      switch s.Transport {                                                                           │
+│      case types.TransportLambda:                                                                    │
+│          return createLambdaMcpServerConn(ctx, s)                                                   │
+│      // ... existing cases ...                                                                      │
+│      }                                                                                              │
+│  }                                                                                                  │
+│                                                                                                     │
+│  func createLambdaMcpServerConn(ctx context.Context, s *model.McpServer) (*client.Client, error) {  │
+│      conf, err := s.GetLambdaConfig()                                                               │
+│      if err != nil {                                                                                │
+│          return nil, err                                                                            │
+│      }                                                                                              │
+│                                                                                                     │
+│      // Create Lambda-backed MCP client                                                             │
+│      // This would invoke Lambda for each tool call                                                 │
+│      return client.NewLambdaMCPClient(conf.FunctionArn, conf.Region)                                │
+│  }                                                                                                  │
+│  ```                                                                                                │
+│                                                                                                     │
+├─────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                                     │
+│  🔌 INTEGRATION POINT #3: Tool Installation → Lambda Spin-up                                        │
+│  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━                                        │
+│                                                                                                     │
+│  WHEN: User subscribes to a PRIVATE tool that needs its own Lambda                                  │
+│  WHY: Private tools require isolated execution environment per user                                 │
+│                                                                                                     │
+│  FILE: orchestrator/src/discovery/provisioning/installer.ts                                         │
+│                                                                                                     │
+│  ```typescript                                                                                      │
+│  // Modify installTool() function                                                                   │
+│                                                                                                     │
+│  export async function installTool(                                                                 │
+│    userId: string,                                                                                  │
+│    tool: InstallableTool                                                                            │
+│  ): Promise<InstallResult> {                                                                        │
+│    // ... existing validation ...                                                                   │
+│                                                                                                     │
+│    // Persist to database                                                                           │
+│    const record = await persistToolConfig(userId, tool);                                            │
+│                                                                                                     │
+│    // 🔌 NEW: Check if tool needs Lambda provisioning                                               │
+│    const toolMetadata = await getToolMetadata(tool.id);                                             │
+│    if (toolMetadata.deployment_type === 'PRIVATE') {                                                │
+│      // Spin up Lambda for this user+tool                                                           │
+│      const lambdaResult = await provisionToolLambda(userId, tool, toolMetadata);                    │
+│                                                                                                     │
+│      // Store Lambda endpoint for this user's tool                                                  │
+│      await storeUserLambdaEndpoint(userId, tool.id, lambdaResult);                                  │
+│    }                                                                                                │
+│                                                                                                     │
+│    // Refresh runtime                                                                               │
+│    await refreshRuntime(userId, tool.id);                                                           │
+│                                                                                                     │
+│    return { success: true, ... };                                                                   │
+│  }                                                                                                  │
+│                                                                                                     │
+│  // 🔌 NEW: Lambda provisioning for tools                                                           │
+│  async function provisionToolLambda(                                                                │
+│    userId: string,                                                                                  │
+│    tool: InstallableTool,                                                                           │
+│    metadata: ToolMetadata                                                                           │
+│  ): Promise<{ functionArn: string; endpointUrl: string }> {                                         │
+│    const lambdaClient = new LambdaClient({ region: process.env.AWS_REGION });                       │
+│                                                                                                     │
+│    const functionName = `tool-${tool.id.slice(0,8)}-${userId.slice(0,8)}`;                          │
+│                                                                                                     │
+│    // Create Lambda from S3 package                                                                 │
+│    await lambdaClient.send(new CreateFunctionCommand({                                              │
+│      FunctionName: functionName,                                                                    │
+│      Runtime: 'nodejs20.x',                                                                         │
+│      Code: {                                                                                        │
+│        S3Bucket: metadata.s3_bucket,                                                                │
+│        S3Key: metadata.s3_package_key,                                                              │
+│      },                                                                                             │
+│      Handler: 'index.handler',                                                                      │
+│      Role: process.env.LAMBDA_EXECUTION_ROLE,                                                       │
+│      Timeout: metadata.timeout_ms / 1000,                                                           │
+│      MemorySize: metadata.memory_mb,                                                                │
+│    }));                                                                                             │
+│                                                                                                     │
+│    // Create function URL                                                                           │
+│    const urlResult = await lambdaClient.send(new CreateFunctionUrlConfigCommand({                   │
+│      FunctionName: functionName,                                                                    │
+│      AuthType: 'AWS_IAM',                                                                           │
+│    }));                                                                                             │
+│                                                                                                     │
+│    return {                                                                                         │
+│      functionArn: `arn:aws:lambda:${region}:${account}:function:${functionName}`,                   │
+│      endpointUrl: urlResult.FunctionUrl,                                                            │
+│    };                                                                                               │
+│  }                                                                                                  │
+│  ```                                                                                                │
+│                                                                                                     │
+├─────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                                     │
+│  🔌 INTEGRATION POINT #4: Tool Invocation via Lambda                                                │
+│  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━                                                 │
+│                                                                                                     │
+│  WHEN: A tool call needs to be routed to a Lambda function                                          │
+│  WHY: Tool is hosted on Lambda, not traditional HTTP                                                │
+│                                                                                                     │
+│  FILE: internal/service/mcp/proxy.go                                                                │
+│                                                                                                     │
+│  ```go                                                                                              │
+│  func (m *MCPService) MCPProxyToolCallHandler(...) (*mcp.CallToolResult, error) {                   │
+│      // ... existing code to parse tool name and get server ...                                     │
+│                                                                                                     │
+│      // 🔌 NEW: Check if this tool should be routed to Lambda                                       │
+│      if server.Transport == types.TransportLambda {                                                 │
+│          return m.invokeLambdaTool(ctx, server, request)                                            │
+│      }                                                                                              │
+│                                                                                                     │
+│      // ... existing upstream connection code ...                                                   │
+│  }                                                                                                  │
+│                                                                                                     │
+│  func (m *MCPService) invokeLambdaTool(                                                             │
+│      ctx context.Context,                                                                           │
+│      server *model.McpServer,                                                                       │
+│      request mcp.CallToolRequest,                                                                   │
+│  ) (*mcp.CallToolResult, error) {                                                                   │
+│      conf, _ := server.GetLambdaConfig()                                                            │
+│                                                                                                     │
+│      // Create Lambda client                                                                        │
+│      client := lambda.NewFromConfig(awsConfig)                                                      │
+│                                                                                                     │
+│      // Serialize MCP request                                                                       │
+│      payload, _ := json.Marshal(map[string]any{                                                     │
+│          "method": "tools/call",                                                                    │
+│          "params": request.Params,                                                                  │
+│      })                                                                                             │
+│                                                                                                     │
+│      // Invoke Lambda                                                                               │
+│      result, err := client.Invoke(ctx, &lambda.InvokeInput{                                         │
+│          FunctionName: aws.String(conf.FunctionArn),                                                │
+│          Payload:      payload,                                                                     │
+│      })                                                                                             │
+│                                                                                                     │
+│      // Parse response                                                                              │
+│      var mcpResult mcp.CallToolResult                                                               │
+│      json.Unmarshal(result.Payload, &mcpResult)                                                     │
+│                                                                                                     │
+│      return &mcpResult, nil                                                                         │
+│  }                                                                                                  │
+│  ```                                                                                                │
+│                                                                                                     │
+└─────────────────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### 11.6 Database Schema Extensions for Lambda
+
+```sql
+-- Add to Supabase for Lambda support
+
+-- Tool metadata for Lambda deployment
+CREATE TABLE tool_deployments_orchestrator (
+  id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  tool_id          UUID REFERENCES tools(id),
+  deployment_type  TEXT CHECK (deployment_type IN ('PUBLIC', 'PRIVATE', 'EXTERNAL')),
+  
+  -- S3 location of MCP package
+  s3_bucket        TEXT,
+  s3_package_key   TEXT,
+  
+  -- Lambda configuration
+  runtime          TEXT DEFAULT 'nodejs20.x',
+  handler          TEXT DEFAULT 'index.handler',
+  timeout_seconds  INT DEFAULT 30,
+  memory_mb        INT DEFAULT 512,
+  
+  -- For PUBLIC tools: shared Lambda ARN
+  shared_lambda_arn TEXT,
+  
+  created_at       TIMESTAMPTZ DEFAULT now(),
+  updated_at       TIMESTAMPTZ DEFAULT now()
+);
+
+-- Track per-user Lambda instances
+CREATE TABLE user_lambda_instances_orchestrator (
+  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id         UUID NOT NULL,
+  tool_id         UUID REFERENCES tools(id),
+  
+  -- Lambda details
+  function_name   TEXT NOT NULL,
+  function_arn    TEXT NOT NULL,
+  function_url    TEXT,
+  
+  -- Status
+  status          TEXT CHECK (status IN ('CREATING', 'ACTIVE', 'FAILED', 'DELETING', 'DELETED')),
+  
+  -- Lifecycle
+  created_at      TIMESTAMPTZ DEFAULT now(),
+  last_invoked_at TIMESTAMPTZ,
+  expires_at      TIMESTAMPTZ,
+  
+  UNIQUE (user_id, tool_id)
+);
+```
+
+---
+
+### 11.7 Visual: Complete System with Lambda
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                           COMPLETE SYSTEM WITH LAMBDA INTEGRATION                                   │
+└─────────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+                                         ┌─────────────┐
+                                         │  AI AGENT   │
+                                         └──────┬──────┘
+                                                │
+                                                ▼
+┌───────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                                    ORCHESTRATOR                                                       │
+│  ┌────────────────────────────────────────────────────────────────────────────────────────────────┐  │
+│  │                                    ROUTING LAYER                                               │  │
+│  │                                                                                                │  │
+│  │            ┌─────────────────────────────────────────────────────────────────┐                 │  │
+│  │            │                   Which mode?                                   │                 │  │
+│  │            └────────────────────────┬────────────────────────────────────────┘                 │  │
+│  │                                     │                                                          │  │
+│  │        ┌────────────────────────────┼────────────────────────────┐                             │  │
+│  │        ▼                            ▼                            ▼                             │  │
+│  │   ┌─────────┐                 ┌─────────┐                 ┌─────────────┐                      │  │
+│  │   │ SHARED  │                 │ DOCKER  │                 │   LAMBDA    │                      │  │
+│  │   │         │                 │         │                 │             │                      │  │
+│  │   │ Single  │                 │ Per-user│                 │  Per-user   │                      │  │
+│  │   │ Jungle  │                 │ Container                 │  Function   │                      │  │
+│  │   └────┬────┘                 └────┬────┘                 └──────┬──────┘                      │  │
+│  │        │                           │                             │                             │  │
+│  └────────┼───────────────────────────┼─────────────────────────────┼─────────────────────────────┘  │
+│           │                           │                             │                                │
+│           │      ┌────────────────────┴────────────────────┐        │                                │
+│           │      │         DISCOVERY LAYER                 │        │                                │
+│           │      │                                         │        │                                │
+│           │      │  When tool not found:                   │        │                                │
+│           │      │  1. Search Supabase (vector)            │        │                                │
+│           │      │  2. Filter & Rank                       │        │                                │
+│           │      │  3. Install + Provision Lambda          │────────┘                                │
+│           │      │                                         │                                         │
+│           │      └─────────────────────────────────────────┘                                         │
+└───────────┼─────────────────────────────────────────────────────────────────────────────────────────┘
+            │
+            ▼
+┌───────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                                        JUNGLE LAYER                                                   │
+│                                                                                                       │
+│   ┌─────────────┐        ┌─────────────┐        ┌─────────────┐        ┌─────────────┐               │
+│   │   Shared    │        │  User A's   │        │  User B's   │        │  User C's   │               │
+│   │   Jungle    │        │   Jungle    │        │   Jungle    │        │   Jungle    │               │
+│   │  (Docker)   │        │  (Docker)   │        │  (Lambda)   │        │  (Lambda)   │               │
+│   └──────┬──────┘        └──────┬──────┘        └──────┬──────┘        └──────┬──────┘               │
+│          │                      │                      │                      │                       │
+│          └──────────────────────┼──────────────────────┼──────────────────────┘                       │
+│                                 │                      │                                              │
+│                    Tool Registry & Proxy               │                                              │
+│                    (knows how to route to tools)       │                                              │
+│                                 │                      │                                              │
+└─────────────────────────────────┼──────────────────────┼──────────────────────────────────────────────┘
+                                  │                      │
+                                  ▼                      ▼
+┌───────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                                        MCP TOOLS LAYER                                                │
+│                                                                                                       │
+│   ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐                  │
+│   │  PUBLIC TOOLS   │  │  PRIVATE TOOLS  │  │  EXTERNAL TOOLS │  │  LOCAL TOOLS    │                  │
+│   │                 │  │  (User Lambda)  │  │                 │  │                 │                  │
+│   │  Shared Lambda  │  │                 │  │  Third-party    │  │  stdio process  │                  │
+│   │  One function   │  │  Per-user       │  │  HTTP APIs      │  │  on same host   │                  │
+│   │  serves all     │  │  Lambda func    │  │                 │  │                 │                  │
+│   │                 │  │                 │  │                 │  │                 │                  │
+│   │  ┌───────────┐  │  │  ┌───────────┐  │  │  ┌───────────┐  │  │  ┌───────────┐  │                  │
+│   │  │ Weather   │  │  │  │ User A's  │  │  │  │  GitHub   │  │  │  │ Postgres  │  │                  │
+│   │  │ Lambda    │  │  │  │ Private   │  │  │  │   API     │  │  │  │  stdio    │  │                  │
+│   │  │           │  │  │  │ DB Lambda │  │  │  │           │  │  │  │           │  │                  │
+│   │  └───────────┘  │  │  └───────────┘  │  │  └───────────┘  │  │  └───────────┘  │                  │
+│   │                 │  │                 │  │                 │  │                 │                  │
+│   │  ┌───────────┐  │  │  ┌───────────┐  │  │  ┌───────────┐  │  │  ┌───────────┐  │                  │
+│   │  │  Maps     │  │  │  │ User B's  │  │  │  │  Stripe   │  │  │  │ Filesystem│  │                  │
+│   │  │ Lambda    │  │  │  │ Private   │  │  │  │   API     │  │  │  │  stdio    │  │                  │
+│   │  │           │  │  │  │ CRM Lambda│  │  │  │           │  │  │  │           │  │                  │
+│   │  └───────────┘  │  │  └───────────┘  │  │  └───────────┘  │  │  └───────────┘  │                  │
+│   │                 │  │                 │  │                 │  │                 │                  │
+│   └─────────────────┘  └─────────────────┘  └─────────────────┘  └─────────────────┘                  │
+│                                                                                                       │
+│   S3 BUCKET                                                                                           │
+│   ┌─────────────────────────────────────────────────────────────────────────────────────────────┐     │
+│   │  /mcps/                                                                                     │     │
+│   │    ├── weather-api/                                                                         │     │
+│   │    │     └── package.zip        (Lambda deployment package)                                 │     │
+│   │    ├── maps-api/                                                                            │     │
+│   │    │     └── package.zip                                                                    │     │
+│   │    └── private-db-tool/                                                                     │     │
+│   │          └── package.zip                                                                    │     │
+│   └─────────────────────────────────────────────────────────────────────────────────────────────┘     │
+│                                                                                                       │
+└───────────────────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+### 11.8 Summary: What Connects Where
+
+| Step | Action | Current Code | Lambda Integration Point |
+|------|--------|--------------|--------------------------|
+| 1 | User requests tool | `server/http.ts` | No change |
+| 2 | Route to Jungle | `routing/router.ts` | Add `case 'lambda'` in provisioner |
+| 3 | Jungle proxies | `mcp/proxy.go` | Add `case TransportLambda` |
+| 4 | Connect upstream | `mcp/util.go` | Add `createLambdaMcpServerConn()` |
+| 5 | Tool not found | `interceptor.ts` | No change |
+| 6 | Discovery | `discovery/index.ts` | No change |
+| 7 | Install tool | `provisioning/installer.ts` | Add Lambda provisioning call |
+| 8 | Retry | `interceptor.ts` | No change |
+
+---
+
 ## Appendix: Quick Reference
 
 ### Environment Variables
