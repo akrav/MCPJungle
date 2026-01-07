@@ -1,1493 +1,1343 @@
-# MCPJungle Complete Architecture Documentation
+# MCPJungle Complete Architecture & Code Pipeline Guide
 
-> **Purpose**: This document provides comprehensive technical documentation for the entire MCPJungle codebase. It is designed to enable another AI agent or developer to understand, integrate with, or extend any part of the system—including connecting Lambda cluster provisioning or other infrastructure components.
+> **Purpose**: This document provides comprehensive technical documentation for the entire MCPJungle codebase. It explains not just *what* each component does, but *why* it exists and *how* data flows through the system. Designed to enable another AI agent or developer to understand, integrate with, or extend any part of the system.
 
 ---
 
 ## Table of Contents
 
-1. [System Overview](#1-system-overview)
-2. [High-Level Architecture](#2-high-level-architecture)
-3. [Core Components](#3-core-components)
-   - [MCPJungle Registry (Go)](#31-mcpjungle-registry-go)
-   - [Orchestrator (TypeScript)](#32-orchestrator-typescript)
-   - [CodeMode Standalone (TypeScript)](#33-codemode-standalone-typescript)
-4. [Data Layer](#4-data-layer)
-   - [Local SQLite Database](#41-local-sqlite-database-go-service)
-   - [Supabase Cloud Database](#42-supabase-cloud-database-discovery)
-5. [MCP Protocol Implementation](#5-mcp-protocol-implementation)
-6. [Discovery System (Epic 4)](#6-discovery-system-epic-4)
-7. [Routing & Provisioning](#7-routing--provisioning)
-8. [CodeMode Execution Engine](#8-codemode-execution-engine)
+1. [What Problem Does MCPJungle Solve?](#1-what-problem-does-mcpjungle-solve)
+2. [The Big Picture](#2-the-big-picture)
+3. [Complete Request Flow: A Journey Through the System](#3-complete-request-flow-a-journey-through-the-system)
+4. [Component Deep Dive](#4-component-deep-dive)
+   - [MCPJungle Registry (Go)](#41-mcpjungle-registry-go)
+   - [Orchestrator (TypeScript)](#42-orchestrator-typescript)
+   - [Discovery System](#43-discovery-system)
+   - [CodeMode Execution Engine](#44-codemode-execution-engine)
+5. [Data Flow Patterns](#5-data-flow-patterns)
+6. [The MCP Protocol Explained](#6-the-mcp-protocol-explained)
+7. [Database Architecture](#7-database-architecture)
+8. [Integration Guide](#8-integration-guide)
 9. [API Reference](#9-api-reference)
-10. [Integration Points](#10-integration-points)
-11. [Security Model](#11-security-model)
-12. [Deployment](#12-deployment)
-13. [Extension Guide](#13-extension-guide)
+10. [Extending the System](#10-extending-the-system)
 
 ---
 
-## 1. System Overview
+## 1. What Problem Does MCPJungle Solve?
 
-**MCPJungle** is a multi-component platform for managing, discovering, and proxying Model Context Protocol (MCP) servers. It enables AI agents to:
+### The Problem
 
-1. **Register** upstream MCP servers (tools)
-2. **Discover** tools dynamically using semantic search
-3. **Proxy** MCP requests to the appropriate upstream server
-4. **Execute** LLM-generated code that calls tools
-5. **Route** requests to per-user or shared instances
+AI agents (like Claude, GPT, etc.) need to interact with external tools—databases, APIs, file systems, etc. The **Model Context Protocol (MCP)** standardizes how AI agents discover and call these tools. But there's a challenge:
 
-### Key Technologies
+1. **Tool Fragmentation**: Different tools run on different servers with different configurations
+2. **Discovery**: AI agents don't know what tools exist or which one to use
+3. **Multi-tenancy**: Each user might need different tools or isolated environments
+4. **Security**: Arbitrary code execution needs to be sandboxed
 
-| Component | Language | Framework | Purpose |
-|-----------|----------|-----------|---------|
-| Registry Server | Go | Gin | MCP proxy & HTTP API |
-| Orchestrator | TypeScript | Express | Gateway, routing, discovery |
-| CodeMode Standalone | TypeScript | isolated-vm | Sandboxed code execution |
-| Database (local) | SQLite | GORM | Local tool/server registry |
-| Database (cloud) | PostgreSQL | Supabase | Tool discovery, user prefs |
+### The Solution
 
----
-
-## 2. High-Level Architecture
+MCPJungle provides a **unified gateway** that:
 
 ```
-┌─────────────────────────────────────────────────────────────────────────────────────┐
-│                                    AI AGENT (Claude, GPT, etc.)                     │
-└─────────────────────────────────────────────────────────────────────────────────────┘
-                                              │
-                                              │ MCP Protocol (JSON-RPC 2.0)
-                                              ▼
-┌─────────────────────────────────────────────────────────────────────────────────────┐
-│                                 ORCHESTRATOR (TypeScript)                           │
-│  ┌─────────────────┐ ┌─────────────────┐ ┌─────────────────┐ ┌─────────────────┐   │
-│  │  HTTP Server    │ │  Discovery      │ │  Routing        │ │  CodeMode       │   │
-│  │  /mcp endpoint  │ │  (Epic 4)       │ │  (Epic 3)       │ │  (Epic 3)       │   │
-│  └────────┬────────┘ └────────┬────────┘ └────────┬────────┘ └────────┬────────┘   │
-│           │                   │                   │                   │             │
-│           │      ┌────────────┴───────────┐      │                   │             │
-│           │      │  Supabase (Cloud)      │      │                   │             │
-│           │      │  - tools table         │      │                   │             │
-│           │      │  - embeddings          │      │                   │             │
-│           │      │  - user_preferences    │      │                   │             │
-│           │      │  - user_tools          │      │                   │             │
-│           │      └────────────────────────┘      │                   │             │
-│           │                                      │                   │             │
-│           └──────────────────────────────────────┼───────────────────┘             │
-└──────────────────────────────────────────────────┼─────────────────────────────────┘
-                                                   │
-                    ┌──────────────────────────────┼──────────────────────────────┐
-                    │                              │                              │
-                    ▼                              ▼                              ▼
-┌─────────────────────────────┐ ┌─────────────────────────────┐ ┌─────────────────────────────┐
-│  SHARED JUNGLE INSTANCE     │ │  PER-USER JUNGLE (Docker)   │ │  FUTURE: Lambda Cluster     │
-│  (Go Registry Server)       │ │  (Isolated Container)       │ │  (AWS Lambda Functions)     │
-│                             │ │                             │ │                             │
-│  - SQLite DB                │ │  - Own SQLite DB            │ │  - Serverless execution     │
-│  - Registered MCP Servers   │ │  - User's registered tools  │ │  - Cold/warm starts         │
-│  - MCP Proxy Server         │ │  - Isolated environment     │ │  - Public/Private MCPs      │
-└──────────────┬──────────────┘ └──────────────┬──────────────┘ └──────────────┬──────────────┘
-               │                               │                               │
-               ▼                               ▼                               ▼
-┌─────────────────────────────────────────────────────────────────────────────────────┐
-│                            UPSTREAM MCP SERVERS (External)                          │
-│                                                                                     │
-│  ┌─────────────┐ ┌─────────────┐ ┌─────────────┐ ┌─────────────┐ ┌─────────────┐   │
-│  │  GitHub API │ │  Weather    │ │  Database   │ │  File Sys   │ │  Custom     │   │
-│  │  (HTTP)     │ │  (HTTP)     │ │  (stdio)    │ │  (stdio)    │ │  (any)      │   │
-│  └─────────────┘ └─────────────┘ └─────────────┘ └─────────────┘ └─────────────┘   │
-└─────────────────────────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           MCPJungle Solution                                │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  1. REGISTRY: Stores all available MCP servers and their tools              │
+│     "Here's a catalog of 50 tools you can use"                              │
+│                                                                             │
+│  2. PROXY: Routes requests to the right server automatically                │
+│     "You asked for 'github__create_issue'? I'll forward that to GitHub"     │
+│                                                                             │
+│  3. DISCOVERY: Finds tools based on what you want to do                     │
+│     "You want to 'check weather'? Let me find the best weather API"         │
+│                                                                             │
+│  4. ISOLATION: Each user can have their own environment                     │
+│     "User A's tools won't interfere with User B's"                          │
+│                                                                             │
+│  5. EXECUTION: Safely runs AI-generated code                                │
+│     "Run this code, but don't let it access the file system"                │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## 3. Core Components
+## 2. The Big Picture
 
-### 3.1 MCPJungle Registry (Go)
+### System Architecture
 
-**Location**: `/internal/`, `/cmd/`, `/pkg/`
-
-The Go service is the **core MCP proxy and registry**. It maintains a local database of registered MCP servers and their tools, and acts as a proxy to forward MCP requests to the appropriate upstream server.
-
-#### Entry Point
-
-```go
-// main.go
-func main() {
-    if err := cmd.Execute(); err != nil {
-        os.Exit(1)
-    }
-}
+```
+                                    AI AGENT
+                                       │
+                                       │ "Call the weather tool"
+                                       ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                        ORCHESTRATOR (TypeScript)                            │
+│                                                                             │
+│  Think of this as a "smart receptionist" that:                              │
+│  • Receives all requests from AI agents                                     │
+│  • Decides where to route them (which Jungle instance?)                     │
+│  • Can discover new tools if one is missing                                 │
+│  • Can execute AI-generated code safely                                     │
+│                                                                             │
+│  ┌─────────────┐ ┌─────────────┐ ┌─────────────┐ ┌─────────────┐            │
+│  │   Router    │ │  Discovery  │ │  CodeMode   │ │   Admin     │            │
+│  │             │ │             │ │             │ │   API       │            │
+│  └──────┬──────┘ └──────┬──────┘ └──────┬──────┘ └─────────────┘            │
+│         │               │               │                                   │
+│         │               │               │                                   │
+│         │      ┌────────┴────────┐      │                                   │
+│         │      │    Supabase     │      │                                   │
+│         │      │  (Cloud DB for  │      │                                   │
+│         │      │   discovery)    │      │                                   │
+│         │      └─────────────────┘      │                                   │
+└─────────┼───────────────────────────────┼───────────────────────────────────┘
+          │                               │
+          ▼                               ▼
+┌─────────────────────────────┐   ┌─────────────────────────────┐
+│    JUNGLE INSTANCE(S)       │   │     CODEMODE SANDBOX        │
+│    (Go Registry Server)     │   │                             │
+│                             │   │  Isolated V8 environment    │
+│  • Stores tool registry     │   │  for running AI code        │
+│  • Proxies MCP requests     │   │                             │
+│  • SQLite database          │   │  (Uses tools via Jungle)    │
+│                             │   │                             │
+└──────────────┬──────────────┘   └─────────────────────────────┘
+               │
+               ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                      UPSTREAM MCP SERVERS                                   │
+│                                                                             │
+│  ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐                │
+│  │ GitHub  │ │ Weather │ │ Database│ │ FileSystem │ │ Custom │             │
+│  │  API    │ │   API   │ │  Query  │ │  Access  │ │  Tool  │               │
+│  │ (HTTP)  │ │ (HTTP)  │ │ (stdio) │ │ (stdio)  │ │  (any) │               │
+│  └─────────┘ └─────────┘ └─────────┘ └─────────┘ └─────────┘                │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-#### Key Commands (CLI)
+### Three Layers Explained
 
-| Command | Description |
-|---------|-------------|
-| `mcpjungle start` | Start the HTTP server |
-| `mcpjungle register` | Register an MCP server |
-| `mcpjungle deregister` | Remove an MCP server |
-| `mcpjungle list` | List all registered servers/tools |
-| `mcpjungle invoke` | Invoke a tool directly |
+**Layer 1: Orchestrator (TypeScript)**
+- The entry point for all AI agent requests
+- Makes routing decisions (shared vs per-user instances)
+- Handles tool discovery when a tool isn't found
+- Provides the CodeMode execution environment
 
-#### Server Modes
+**Layer 2: Jungle (Go)**
+- The actual MCP proxy server
+- Maintains a database of registered MCP servers
+- Forwards tool calls to the appropriate upstream server
+- Can run as shared instance or per-user containers
 
-```go
-// internal/model/server_config.go
-type ServerMode string
+**Layer 3: Upstream MCP Servers**
+- The actual tools (GitHub API, weather service, database, etc.)
+- Can use different transports: HTTP, stdio (command line), SSE
+- MCPJungle doesn't run these—it just knows how to reach them
 
-const (
-    ModeDev        ServerMode = "development"
-    ModeEnterprise ServerMode = "enterprise"
-)
+---
+
+## 3. Complete Request Flow: A Journey Through the System
+
+Let's trace what happens when an AI agent calls a tool. This is the most important section for understanding how everything connects.
+
+### Scenario: AI Agent Calls `github__create_issue`
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                                                                             │
+│  STEP 1: AI Agent sends JSON-RPC request to Orchestrator                    │
+│  ──────────────────────────────────────────────────────────────────────     │
+│                                                                             │
+│  POST /mcp HTTP/1.1                                                         │
+│  Content-Type: application/json                                             │
+│  X-User-Id: user-12345                                                      │
+│                                                                             │
+│  {                                                                          │
+│    "jsonrpc": "2.0",                                                        │
+│    "id": 1,                                                                 │
+│    "method": "tools/call",                                                  │
+│    "params": {                                                              │
+│      "name": "github__create_issue",                                        │
+│      "arguments": {                                                         │
+│        "repo": "my-org/my-repo",                                            │
+│        "title": "Bug: Login broken",                                        │
+│        "body": "Users can't log in"                                         │
+│      }                                                                      │
+│    }                                                                        │
+│  }                                                                          │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                                                                             │
+│  STEP 2: Orchestrator receives request (server/http.ts)                     │
+│  ──────────────────────────────────────────────────────────────────────     │
+│                                                                             │
+│  The Express.js server at /mcp does several things:                         │
+│                                                                             │
+│  a) Validates the request is valid JSON-RPC                                 │
+│  b) Extracts the user ID from headers                                       │
+│  c) Applies rate limiting                                                   │
+│  d) Checks if the method is allowed (tools/call is allowed)                 │
+│                                                                             │
+│  // orchestrator/src/server/http.ts                                         │
+│  app.post('/mcp', async (req, res) => {                                     │
+│    const body = req.body;                                                   │
+│    if (!isJsonRpcObject(body)) return res.json(InvalidRequest(id));         │
+│                                                                             │
+│    const userId = req.headers['x-user-id'];                                 │
+│    const decision = await resolveJungleEndpoint({ userId });                │
+│    // decision = { baseUrl: 'http://localhost:9000', mode: 'shared' }       │
+│    ...                                                                      │
+│  });                                                                        │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                                                                             │
+│  STEP 3: Route Resolution (routing/router.ts)                               │
+│  ──────────────────────────────────────────────────────────────────────     │
+│                                                                             │
+│  The router decides WHICH Jungle instance should handle this request:       │
+│                                                                             │
+│  // orchestrator/src/routing/router.ts                                      │
+│  async function resolveJungleEndpoint({ userId }) {                         │
+│    const cfg = loadConfig(process.env);                                     │
+│                                                                             │
+│    // MODE 1: Shared - everyone uses the same Jungle                        │
+│    if (cfg.routingMode === 'shared' || !userId) {                           │
+│      return { baseUrl: cfg.jungleUrl, mode: 'shared' };                     │
+│    }                                                                        │
+│                                                                             │
+│    // MODE 2: Per-user - check if user already has an instance              │
+│    const existingUrl = storeGet(userId);                                    │
+│    if (existingUrl) {                                                       │
+│      return { baseUrl: existingUrl, mode: 'per_user' };                     │
+│    }                                                                        │
+│                                                                             │
+│    // MODE 3: Provision on demand - spin up a new container                 │
+│    if (cfg.provisionOnDemand) {                                             │
+│      const provisioner = await getProvisioner(); // Docker or K8s           │
+│      const { baseUrl } = await provisioner.provision(userId);               │
+│      storeSet(userId, baseUrl, ttl);                                        │
+│      return { baseUrl, mode: 'per_user' };                                  │
+│    }                                                                        │
+│                                                                             │
+│    // Fallback to shared                                                    │
+│    return { baseUrl: cfg.jungleUrl, mode: 'shared' };                       │
+│  }                                                                          │
+│                                                                             │
+│  WHY THIS MATTERS:                                                          │
+│  • Shared mode is simple and cheap (one server for everyone)                │
+│  • Per-user mode isolates users (User A can't see User B's tools)           │
+│  • On-demand provisioning creates containers only when needed               │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                                                                             │
+│  STEP 4: Forward to Jungle (server/upstream.ts)                             │
+│  ──────────────────────────────────────────────────────────────────────     │
+│                                                                             │
+│  The Orchestrator forwards the exact same JSON-RPC request to Jungle:       │
+│                                                                             │
+│  // orchestrator/src/server/upstream.ts                                     │
+│  const upstream = await fetch(`${decision.baseUrl}/mcp`, {                  │
+│    method: 'POST',                                                          │
+│    headers: {                                                               │
+│      'Content-Type': 'application/json',                                    │
+│      'Mcp-Session-Id': sessionId,     // MCP requires session management    │
+│      'Authorization': `Bearer ${token}`,                                    │
+│    },                                                                       │
+│    body: JSON.stringify(body),        // Same body we received              │
+│  });                                                                        │
+│                                                                             │
+│  SESSION MANAGEMENT:                                                        │
+│  MCP requires sessions. The Orchestrator:                                   │
+│  1. Calls 'initialize' on first request to get a session ID                 │
+│  2. Stores that session ID                                                  │
+│  3. Includes it in all subsequent requests                                  │
+│  4. Can refresh the session if it expires                                   │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                                                                             │
+│  STEP 5: Jungle Receives Request (Go: internal/api/server.go)               │
+│  ──────────────────────────────────────────────────────────────────────     │
+│                                                                             │
+│  The Jungle server (written in Go) exposes /mcp using the mcp-go library:   │
+│                                                                             │
+│  // The router wraps the MCP server                                         │
+│  streamableHTTPServer := server.NewStreamableHTTPServer(s.mcpProxyServer)   │
+│  r.Any("/mcp", gin.WrapH(streamableHTTPServer))                             │
+│                                                                             │
+│  The MCP server automatically:                                              │
+│  1. Parses the JSON-RPC request                                             │
+│  2. Identifies it as a 'tools/call' method                                  │
+│  3. Looks up the tool by name                                               │
+│  4. Invokes the registered handler                                          │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                                                                             │
+│  STEP 6: Tool Handler (Go: internal/service/mcp/proxy.go)                   │
+│  ──────────────────────────────────────────────────────────────────────     │
+│                                                                             │
+│  This is where the magic happens. The proxy handler:                        │
+│                                                                             │
+│  func MCPProxyToolCallHandler(ctx context.Context, request CallToolRequest) │
+│                                                                             │
+│  // 1. Parse the tool name to find the server                               │
+│  // "github__create_issue" → server: "github", tool: "create_issue"         │
+│  serverName, toolName, _ := splitServerToolName(request.Params.Name)        │
+│                                                                             │
+│  // 2. Look up the server configuration in the database                     │
+│  server, _ := m.GetMcpServer(serverName)                                    │
+│  // server.Config contains: URL, bearer token, etc.                         │
+│                                                                             │
+│  // 3. Create a connection to the upstream MCP server                       │
+│  mcpClient, _ := newMcpServerSession(ctx, server)                           │
+│  // This might:                                                             │
+│  //   - Open an HTTP connection to https://api.github.com                   │
+│  //   - Spawn a subprocess for stdio servers                                │
+│  //   - Connect via SSE                                                     │
+│                                                                             │
+│  // 4. Forward the request (without the server prefix)                      │
+│  request.Params.Name = toolName  // "create_issue" not "github__create_issue│
+│  response, _ := mcpClient.CallTool(ctx, request)                            │
+│                                                                             │
+│  // 5. Return the response                                                  │
+│  return response                                                            │
+│                                                                             │
+│  WHY THE NAME PREFIX?                                                       │
+│  • Tools from different servers might have the same name                    │
+│  • "github__list" and "gitlab__list" are both "list" tools                  │
+│  • The prefix ensures uniqueness across the registry                        │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                                                                             │
+│  STEP 7: Connect to Upstream Server (Go: internal/service/mcp/util.go)      │
+│  ──────────────────────────────────────────────────────────────────────     │
+│                                                                             │
+│  Depending on the transport type, we connect differently:                   │
+│                                                                             │
+│  func newMcpServerSession(ctx, server) (*client.Client, error) {            │
+│    switch server.Transport {                                                │
+│                                                                             │
+│    case "http":  // Streamable HTTP (most common)                           │
+│      // Connect via HTTP, optionally with bearer token                      │
+│      client := client.NewStreamableHttpClient(config.URL)                   │
+│      client.Initialize(ctx)  // MCP handshake                               │
+│      return client                                                          │
+│                                                                             │
+│    case "stdio":  // Command line process (local tools)                     │
+│      // Spawn a subprocess, communicate via stdin/stdout                    │
+│      client := client.NewStdioMCPClient(                                    │
+│        "python",                 // command                                 │
+│        ["server.py"],            // args                                    │
+│        {"API_KEY": "xxx"},       // env vars                                │
+│      )                                                                      │
+│      return client                                                          │
+│                                                                             │
+│    case "sse":  // Server-Sent Events (legacy)                              │
+│      client := client.NewSSEMCPClient(config.URL)                           │
+│      client.Start(ctx)                                                      │
+│      return client                                                          │
+│    }                                                                        │
+│  }                                                                          │
+│                                                                             │
+│  THE THREE TRANSPORTS:                                                      │
+│  • HTTP: The server is a web service (e.g., https://api.example.com)        │
+│  • stdio: The server is a local program (e.g., a Python script)             │
+│  • SSE: Like HTTP but uses Server-Sent Events for streaming                 │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                      │
+                                      ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                                                                             │
+│  STEP 8: Response Flows Back                                                │
+│  ──────────────────────────────────────────────────────────────────────     │
+│                                                                             │
+│  The response from the upstream server travels back:                        │
+│                                                                             │
+│  Upstream Server                                                            │
+│      ↓ MCP CallToolResult                                                   │
+│  Jungle Proxy Handler                                                       │
+│      ↓ Wrapped in JSON-RPC response                                         │
+│  Jungle /mcp endpoint                                                       │
+│      ↓ HTTP response                                                        │
+│  Orchestrator                                                               │
+│      ↓ Streams/forwards response                                            │
+│  AI Agent                                                                   │
+│                                                                             │
+│  RESPONSE FORMAT:                                                           │
+│  {                                                                          │
+│    "jsonrpc": "2.0",                                                        │
+│    "id": 1,                                                                 │
+│    "result": {                                                              │
+│      "content": [                                                           │
+│        {                                                                    │
+│          "type": "text",                                                    │
+│          "text": "Issue #42 created successfully"                           │
+│        }                                                                    │
+│      ]                                                                      │
+│    }                                                                        │
+│  }                                                                          │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-- **Development**: Single-user, no auth required
-- **Enterprise**: Multi-user, requires authentication via access tokens
+---
 
-#### MCP Server Model
+## 4. Component Deep Dive
+
+### 4.1 MCPJungle Registry (Go)
+
+The Go service is the **core MCP proxy and registry**. Think of it as a "switchboard" that knows about all available tools and can connect calls to the right place.
+
+#### How Tools Get Registered
+
+When you run `mcpjungle register`, here's what happens:
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         TOOL REGISTRATION FLOW                              │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  USER RUNS:                                                                 │
+│  $ mcpjungle register --name github --url https://api.github.com/mcp       │
+│                                                                             │
+│  STEP 1: CLI parses the command (cmd/register.go)                           │
+│  ──────────────────────────────────────────────────────────────────────     │
+│  input := types.RegisterServerInput{                                        │
+│    Name:      "github",                                                     │
+│    Transport: "http",                                                       │
+│    URL:       "https://api.github.com/mcp",                                 │
+│  }                                                                          │
+│  apiClient.RegisterServer(&input)                                           │
+│                                                                             │
+│  STEP 2: API handler validates and stores (internal/api/mcp_servers.go)     │
+│  ──────────────────────────────────────────────────────────────────────     │
+│  server := model.NewStreamableHTTPServer(name, desc, url, token)            │
+│  mcpService.RegisterMcpServer(ctx, server)                                  │
+│                                                                             │
+│  STEP 3: Service connects to discover tools (internal/service/mcp/server.go)│
+│  ──────────────────────────────────────────────────────────────────────     │
+│  // Actually connect to the upstream server                                 │
+│  mcpClient, _ := newMcpServerSession(ctx, server)                           │
+│                                                                             │
+│  // Save the server to database                                             │
+│  db.Create(server)                                                          │
+│                                                                             │
+│  // Fetch all tools from that server                                        │
+│  mcpService.registerServerTools(ctx, server, mcpClient)                     │
+│                                                                             │
+│  STEP 4: Tools are stored and added to proxy (internal/service/mcp/tool.go) │
+│  ──────────────────────────────────────────────────────────────────────     │
+│  for _, tool := range resp.Tools {                                          │
+│    // Store in database                                                     │
+│    db.Create(&model.Tool{                                                   │
+│      ServerID:    server.ID,                                                │
+│      Name:        tool.Name,         // "create_issue"                      │
+│      Description: tool.Description,                                         │
+│      InputSchema: tool.InputSchema,                                         │
+│    })                                                                       │
+│                                                                             │
+│    // Add to in-memory proxy with canonical name                            │
+│    tool.Name = "github__create_issue"  // server + "__" + tool              │
+│    mcpProxyServer.AddTool(tool, MCPProxyToolCallHandler)                    │
+│  }                                                                          │
+│                                                                             │
+│  RESULT:                                                                    │
+│  • Server "github" saved to SQLite with URL configuration                   │
+│  • All tools like "github__create_issue" added to proxy                     │
+│  • Tools immediately available for AI agents to call                        │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### Key Data Models
 
 ```go
-// internal/model/mcp_server.go
+// The server model - WHERE to connect
 type McpServer struct {
-    gorm.Model
-    Name        string                   `json:"name" gorm:"uniqueIndex;not null"`
-    Transport   types.McpServerTransport `json:"transport"` // stdio | http | sse
-    Description string                   `json:"description"`
-    Config      datatypes.JSON           `json:"config"`    // Transport-specific config
+    ID          uint
+    Name        string          // "github" - unique identifier
+    Transport   string          // "http", "stdio", or "sse"
+    Description string          // Human-readable description
+    Config      JSON            // Transport-specific settings:
+    // For HTTP: { "url": "https://...", "bearer_token": "xxx" }
+    // For stdio: { "command": "python", "args": ["server.py"], "env": {...} }
 }
 
-// Transport configurations
-type StreamableHTTPConfig struct {
-    URL         string `json:"url"`
-    BearerToken string `json:"bearer_token,omitempty"`
-}
-
-type StdioConfig struct {
-    Command string            `json:"command"`
-    Args    []string          `json:"args,omitempty"`
-    Env     map[string]string `json:"env,omitempty"`
-}
-
-type SSEConfig struct {
-    URL         string `json:"url"`
-    BearerToken string `json:"bearer_token,omitempty"`
-}
-```
-
-#### Tool Model
-
-```go
-// internal/model/mcp_tool.go
+// The tool model - WHAT you can call
 type Tool struct {
-    gorm.Model
-    Name        string         `json:"name"`
-    Enabled     bool           `json:"enabled" gorm:"default:true"`
-    Description string         `json:"description"`
-    InputSchema datatypes.JSON `json:"input_schema" gorm:"type:jsonb"`
-    ServerID    uint           `json:"-" gorm:"not null"`
-    Server      McpServer      `json:"-" gorm:"foreignKey:ServerID"`
+    ID          uint
+    Name        string          // "create_issue" (without server prefix)
+    Description string          // "Creates a new GitHub issue"
+    InputSchema JSON            // JSON Schema for parameters
+    Enabled     bool            // Can be disabled without removing
+    ServerID    uint            // Foreign key to McpServer
 }
 ```
 
-#### MCP Service
+#### Why the `__` Separator?
 
-```go
-// internal/service/mcp/mcp.go
-type MCPService struct {
-    db                *gorm.DB
-    mcpProxyServer    *server.MCPServer     // For stdio/http tools
-    sseMcpProxyServer *server.MCPServer     // For SSE tools
-    toolInstances     map[string]mcp.Tool   // In-memory cache
-    mu                sync.RWMutex
-    metrics           telemetry.CustomMetrics
-}
+Tools need unique names across the entire registry:
 
-// Key methods
-func (m *MCPService) RegisterMcpServer(ctx context.Context, s *model.McpServer) error
-func (m *MCPService) DeregisterMcpServer(name string) error
-func (m *MCPService) ListTools() ([]model.Tool, error)
-func (m *MCPService) InvokeTool(ctx context.Context, name string, args map[string]any) (*types.ToolInvokeResult, error)
 ```
+Server: "github"  → Tools: "create_issue", "list_repos"
+Server: "gitlab"  → Tools: "create_issue", "list_repos"  // Same names!
 
-#### Tool Name Convention
+Solution:
+github__create_issue   ← Unique!
+gitlab__create_issue   ← Unique!
 
-Tools are uniquely identified by: `<server_name>__<tool_name>`
-
-```go
-// internal/service/mcp/util.go
-const serverToolNameSep = "__"
-
-// Example: "github__create_issue"
-func mergeServerToolNames(s, t string) string {
-    return s + serverToolNameSep + t
-}
-
-func splitServerToolName(name string) (string, string, bool) {
-    return strings.Cut(name, serverToolNameSep)
-}
-```
-
-#### MCP Proxy Flow
-
-```go
-// internal/service/mcp/proxy.go
-func (m *MCPService) MCPProxyToolCallHandler(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-    // 1. Parse tool name to get server and tool
-    serverName, toolName, _ := splitServerToolName(request.Params.Name)
-    
-    // 2. Check authorization (enterprise mode)
-    if model.IsEnterpriseMode(serverMode) {
-        client := ctx.Value("client").(*model.McpClient)
-        if !client.CheckHasServerAccess(serverName) {
-            return nil, fmt.Errorf("not authorized")
-        }
-    }
-    
-    // 3. Get server config from DB
-    server, _ := m.GetMcpServer(serverName)
-    
-    // 4. Create session with upstream MCP server
-    mcpClient, _ := newMcpServerSession(ctx, server)
-    defer mcpClient.Close()
-    
-    // 5. Forward the request
-    request.Params.Name = toolName  // Remove server prefix
-    return mcpClient.CallTool(ctx, request)
-}
-```
-
-#### HTTP API Routes
-
-```go
-// internal/api/server.go
-func (s *Server) setupRouter() (*gin.Engine, error) {
-    r := gin.Default()
-    
-    // Health check
-    r.GET("/health", ...)
-    
-    // MCP Proxy endpoints
-    r.Any("/mcp", ...)           // Streamable HTTP
-    r.Any("/sse", ...)           // SSE transport
-    r.Any("/message", ...)       // SSE messages
-    
-    // Tool Group endpoints
-    r.Any("/v0/groups/:name/mcp", ...)
-    r.Any("/v0/groups/:name/sse", ...)
-    
-    // API endpoints
-    apiV0 := r.Group("/api/v0")
-    apiV0.GET("/servers", ...)
-    apiV0.GET("/tools", ...)
-    apiV0.POST("/tools/invoke", ...)
-    apiV0.POST("/servers", ...)        // Admin only
-    apiV0.DELETE("/servers/:name", ...)  // Admin only
-    
-    return r, nil
-}
+When proxying:
+1. Parse: "github__create_issue" → server="github", tool="create_issue"
+2. Look up server config from database
+3. Call upstream with just "create_issue"
 ```
 
 ---
 
-### 3.2 Orchestrator (TypeScript)
+### 4.2 Orchestrator (TypeScript)
 
-**Location**: `/orchestrator/src/`
+The Orchestrator adds intelligence and features on top of the basic Jungle proxy.
 
-The Orchestrator is a **gateway layer** that sits between AI agents and the MCPJungle registry. It provides:
+#### What It Does That Jungle Doesn't
 
-- Request routing (shared vs per-user)
-- Tool discovery (via Supabase)
-- CodeMode execution
-- Session management
+| Feature | Jungle (Go) | Orchestrator (TypeScript) |
+|---------|-------------|---------------------------|
+| Basic MCP proxy | ✅ | Forwards to Jungle |
+| Tool registry | ✅ | Uses Jungle's |
+| User routing | ❌ | ✅ Shared vs per-user |
+| Container provisioning | ❌ | ✅ Docker/K8s |
+| Tool discovery | ❌ | ✅ Vector search |
+| Code execution | ❌ | ✅ CodeMode sandbox |
 
-#### Directory Structure
+#### Directory Structure Explained
 
 ```
 orchestrator/src/
-├── auth/                 # Authentication
-│   ├── authorize.ts      # Method authorization
-│   └── bearer.ts         # Bearer token extraction
-├── codemode/             # Code execution engine
-│   ├── index.ts          # Facade
-│   ├── runner.ts         # Code runner
-│   ├── invoker.ts        # Tool invocation bridge
-│   ├── binding.ts        # Tool bindings
-│   ├── cache.ts          # Type cache
-│   ├── typegen.ts        # TypeScript generation
-│   ├── policy.ts         # Security policy
-│   └── telemetry.ts      # Execution telemetry
-├── config/               # Configuration
-│   ├── schema.ts         # Zod schema
-│   └── load.ts           # Config loader
-├── discovery/            # Tool discovery (Epic 4)
-│   ├── index.ts          # Main entry point
-│   ├── supabase/         # Supabase client & service
-│   ├── search/           # Vector search & embeddings
-│   ├── selection/        # Filtering & ranking
-│   ├── preferences/      # User preferences
-│   ├── provisioning/     # Tool installation
-│   └── interaction/      # Manual mode UI
-├── health/               # Health checks
-├── jsonrpc/              # JSON-RPC utilities
-├── obs/                  # Observability (logging, OTEL)
-├── provisioning/         # Container provisioning
-│   ├── types.ts          # Provisioner interface
-│   ├── docker.ts         # Docker provisioner
-│   └── k8s.ts            # Kubernetes provisioner
-├── routing/              # Request routing
-│   ├── router.ts         # Route resolution
-│   ├── store.ts          # User->URL mapping
-│   └── types.ts          # Route types
-├── security/             # Security middleware
-│   ├── helmet.ts         # HTTP headers
-│   ├── limits.ts         # Size limits
-│   └── rateLimit.ts      # Rate limiting
-└── server/               # HTTP server
-    ├── http.ts           # Main Express app
-    ├── upstream.ts       # Upstream communication
-    ├── admin.ts          # Admin API
-    ├── interceptor.ts    # Discovery interceptor
-    └── dev.ts            # Dev server entry
-```
-
-#### Configuration Schema
-
-```typescript
-// orchestrator/src/config/schema.ts
-export const configSchema = z.object({
-  // Core
-  JUNGLE_URL: z.string().url(),
-  PORT: z.string().optional().transform(v => parseInt(v || '8080')),
-  BIND: z.string().default('127.0.0.1'),
-  
-  // Authentication
-  JUNGLE_TOKEN: z.string().optional(),
-  
-  // Timeouts
-  ORCH_UPSTREAM_TIMEOUT_MS: z.string().optional().transform(v => parseInt(v || '30000')),
-  
-  // CodeMode
-  CODEMODE_TELEMETRY: z.string().optional().transform(v => v === 'true'),
-  CODEMODE_PERSIST_CODE: z.string().optional().transform(v => v === 'true'),
-  
-  // Routing
-  ROUTING_MODE: z.enum(['shared', 'per_user']).default('shared'),
-  ROUTING_USER_TTL_MS: z.string().optional().transform(v => parseInt(v || '1800000')),
-  
-  // Provisioning
-  PROVISIONER: z.enum(['none', 'docker', 'k8s']).default('none'),
-  PROVISION_ON_DEMAND: z.string().optional().transform(v => v === 'true'),
-  
-  // Discovery (Supabase)
-  SUPABASE_URL: z.string().url().optional(),
-  SUPABASE_KEY: z.string().optional(),
-  
-  // AI (OpenAI)
-  OPENAI_API_KEY: z.string().optional(),
-});
-
-export type OrchestratorConfig = {
-  jungleUrl: string;
-  port: number;
-  bind: string;
-  jungleToken?: string;
-  upstreamTimeoutMs: number;
-  routingMode: 'shared' | 'per_user';
-  routingUserTtlMs: number;
-  provisioner: 'none' | 'docker' | 'k8s';
-  provisionOnDemand: boolean;
-  supabaseUrl?: string;
-  supabaseKey?: string;
-  openaiApiKey?: string;
-};
-```
-
-#### HTTP Server
-
-```typescript
-// orchestrator/src/server/http.ts
-const app = express();
-
-// Middleware
-app.use(applyHelmet());
-app.use(express.json({ limit: '1mb' }));
-app.use('/mcp', simpleRateLimit(5, 1000));
-app.use(bearerAuth());
-
-// Health check
-app.get('/healthz', healthz);
-
-// Main MCP endpoint
-app.post('/mcp', enforceJsonAndSize(1_000_000), authorizeMethods(), async (req, res) => {
-  const body = req.body;
-  
-  // Handle initialize
-  if (body.method === 'initialize') {
-    // Forward to upstream Jungle
-    const decision = await resolveJungleEndpoint({ userId });
-    const upstream = await fetch(`${decision.baseUrl}/mcp`, { ... });
-    // ...
-  }
-  
-  // Handle tools/list, tools/call, etc.
-  // Forward to appropriate Jungle instance
-  const decision = await resolveJungleEndpoint({ userId });
-  const upstream = await fetchWithRetry(`${decision.baseUrl}/mcp`, { ... });
-  // ...
-});
-```
-
-#### Routing Logic
-
-```typescript
-// orchestrator/src/routing/router.ts
-export async function resolveJungleEndpoint({ userId }: { userId?: string }): Promise<RouteDecision> {
-  const cfg = loadConfig(process.env);
-  
-  // Shared mode: everyone uses the same Jungle instance
-  if (cfg.routingMode === 'shared' || !userId) {
-    return { baseUrl: cfg.jungleUrl, mode: 'shared' };
-  }
-  
-  // Per-user mode: check if user already has an instance
-  const mapped = storeGet(userId);
-  if (mapped) {
-    return { baseUrl: mapped, mode: 'per_user' };
-  }
-  
-  // Provision on demand
-  if (cfg.provisionOnDemand) {
-    const prov = await getProvisioner();
-    const { baseUrl } = await prov.provision(userId);
-    await waitForHealthy(baseUrl);
-    storeSet(userId, baseUrl, cfg.routingUserTtlMs);
-    return { baseUrl, mode: 'per_user' };
-  }
-  
-  // Fallback to shared
-  return { baseUrl: cfg.jungleUrl, mode: 'shared' };
-}
-```
-
-#### Provisioner Interface
-
-```typescript
-// orchestrator/src/provisioning/types.ts
-export interface Provisioner {
-  provision(userId: string): Promise<{ baseUrl: string }>;
-  stop(userId: string): Promise<void>;
-  isHealthy(baseUrl: string): Promise<boolean>;
-}
-
-// Get provisioner based on config
-export async function getProvisioner(): Promise<Provisioner> {
-  const cfg = loadConfig(process.env);
-  switch (cfg.provisioner) {
-    case 'docker':
-      return new DockerProvisioner();
-    case 'k8s':
-      return new K8sProvisioner();
-    default:
-      return new NoopProvisioner();
-  }
-}
-```
-
-#### Docker Provisioner
-
-```typescript
-// orchestrator/src/provisioning/docker.ts
-export class DockerProvisioner implements Provisioner {
-  async provision(userId: string): Promise<{ baseUrl: string }> {
-    const image = process.env.JUNGLE_IMAGE || 'mcpjungle/mcpjungle:latest-stdio';
-    const name = `jungle-${userId}`;
-    
-    // Run container
-    await pexec('docker', ['run', '-d', '--name', name, '-p', '0:9000', image]);
-    
-    // Get assigned port
-    const { stdout } = await pexec('docker', ['inspect', name]);
-    const port = parseInspectHostPort(JSON.parse(stdout));
-    
-    return { baseUrl: `http://127.0.0.1:${port}` };
-  }
-  
-  async stop(userId: string): Promise<void> {
-    await pexec('docker', ['rm', '-f', `jungle-${userId}`]);
-  }
-}
+│
+├── server/          # HTTP SERVER LAYER
+│   │                # Handles incoming requests from AI agents
+│   │
+│   ├── http.ts      # Main Express app
+│   │                # • POST /mcp → proxies to Jungle
+│   │                # • Validates JSON-RPC format
+│   │                # • Rate limiting, auth
+│   │
+│   ├── upstream.ts  # Jungle communication
+│   │                # • fetchWithRetry() - handles flaky connections
+│   │                # • Session management (MCP requires sessions)
+│   │                # • postToJungle() - used by CodeMode
+│   │
+│   ├── admin.ts     # Admin API for manual tool selection
+│   │                # • POST /admin/select-tool
+│   │                # • GET /admin/pending
+│   │
+│   └── interceptor.ts # Discovery trigger
+│                    # • Catches "Method not found" errors
+│                    # • Triggers tool discovery
+│                    # • Retries after installation
+│
+├── routing/         # REQUEST ROUTING LAYER
+│   │                # Decides which Jungle instance handles a request
+│   │
+│   ├── router.ts    # Main routing logic
+│   │                # • resolveJungleEndpoint() → { baseUrl, mode }
+│   │                # • Shared mode: same URL for everyone
+│   │                # • Per-user: user-specific containers
+│   │
+│   ├── store.ts     # User → URL mapping
+│   │                # • In-memory Map with TTL
+│   │                # • get(userId) → baseUrl
+│   │                # • set(userId, baseUrl, ttl)
+│   │
+│   └── types.ts     # RouteDecision interface
+│
+├── provisioning/    # CONTAINER MANAGEMENT LAYER
+│   │                # Spins up isolated Jungle instances
+│   │
+│   ├── types.ts     # Provisioner interface
+│   │                # • provision(userId) → { baseUrl }
+│   │                # • stop(userId)
+│   │                # • isHealthy(baseUrl)
+│   │
+│   ├── docker.ts    # Docker provisioner
+│   │                # • Runs: docker run jungle-{userId} -p 0:9000 ...
+│   │                # • Gets assigned port from docker inspect
+│   │
+│   └── k8s.ts       # Kubernetes provisioner
+│                    # • Creates Deployment + Service per user
+│
+├── discovery/       # TOOL DISCOVERY LAYER (Epic 4)
+│   │                # Finds tools based on what user wants to do
+│   │
+│   ├── supabase/    # Database connection
+│   ├── search/      # Vector search pipeline
+│   ├── selection/   # Filtering & ranking
+│   ├── preferences/ # User settings
+│   ├── provisioning/# Tool installation
+│   └── interaction/ # Manual mode UI
+│   │
+│   └── index.ts     # Main entry: resolveMissingTool()
+│
+├── codemode/        # CODE EXECUTION LAYER
+│   │                # Safely runs AI-generated code
+│   │
+│   ├── runner.ts    # runCode() - main entry point
+│   ├── invoker.ts   # invokeTool() - bridges code to Jungle
+│   └── ...          # Type generation, caching, telemetry
+│
+└── config/          # CONFIGURATION
+    ├── schema.ts    # Zod schema for env vars
+    └── load.ts      # loadConfig(process.env)
 ```
 
 ---
 
-### 3.3 CodeMode Standalone (TypeScript)
+### 4.3 Discovery System
 
-**Location**: `/codemode-standalone/src/`
+The Discovery System (Epic 4) automatically finds tools when an AI agent needs something that isn't registered.
 
-CodeMode is a **sandboxed code execution engine** that allows AI agents to generate and execute code that calls MCP tools.
-
-#### Directory Structure
+#### The Problem It Solves
 
 ```
-codemode-standalone/src/
-├── core/
-│   ├── CodemodeEngine.ts    # Main engine
-│   ├── TypeGenerator.ts     # Generate TypeScript definitions
-│   └── ToolRegistry.ts      # Tool registration
-├── execution/
-│   ├── IsolatedExecutor.ts  # V8 isolate execution
-│   ├── ExecutionContext.ts  # Execution context
-│   └── SecurityPolicy.ts    # Security constraints
-├── mcp/
-│   ├── MCPClient.ts         # MCP client wrapper
-│   ├── MCPToolConverter.ts  # Convert MCP tools to codemode tools
-│   └── types.ts             # MCP types
-├── llm/
-│   ├── AnthropicAdapter.ts  # Anthropic code generation
-│   ├── ToolCallingEngine.ts # Native tool calling
-│   └── types.ts             # LLM types
-├── types/
-│   └── index.ts             # Shared types
-└── index.ts                 # Exports
+AI Agent: "I need to check the weather in London"
+
+WITHOUT Discovery:
+  → Error: "Method not found: weather__get_forecast"
+  → AI agent is stuck
+
+WITH Discovery:
+  1. Intercept the error
+  2. Search for tools matching "weather forecast London"
+  3. Find "Test Weather API" with 95% similarity
+  4. Install it for the user
+  5. Retry the original request
+  → Success!
 ```
 
-#### Core Types
+#### How It Works
 
-```typescript
-// codemode-standalone/src/types/index.ts
-export interface Tool {
-  name: string;
-  description: string;
-  inputSchema: JSONSchema;
-  execute: (input: any) => Promise<any>;
-}
-
-export interface SecurityPolicy {
-  maxExecutionTime: number;    // milliseconds
-  maxMemoryMB: number;         // memory limit
-  allowNetworkAccess: boolean;
-  allowFileAccess: boolean;
-}
-
-export interface ExecutionResult<T = any> {
-  success: boolean;
-  result?: T;
-  error?: { message: string; stack?: string };
-  executionTime: number;
-}
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                          DISCOVERY PIPELINE                                 │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  INPUT: User query "I need to check weather"                                │
+│                                                                             │
+│  STEP 1: QUERY EXPANSION (search/queryExpansion.ts)                         │
+│  ────────────────────────────────────────────────────────────               │
+│  We don't search for "check weather" directly. Instead, we ask              │
+│  an LLM to generate an "ideal tool description":                            │
+│                                                                             │
+│  User Query: "check weather"                                                │
+│           ↓                                                                 │
+│  GPT-4o-mini prompt:                                                        │
+│    "Given a user's query about what they want to accomplish,                │
+│     generate an ideal tool description..."                                  │
+│           ↓                                                                 │
+│  Expanded: "A comprehensive weather API for getting current                 │
+│            conditions, forecasts, and alerts by location.                   │
+│            Supports city name, coordinates, and zip code lookups."          │
+│                                                                             │
+│  WHY? "check weather" is vague. The expanded description                    │
+│  matches better with tool descriptions in the database.                     │
+│                                                                             │
+│  STEP 2: EMBEDDING GENERATION (search/embedding.ts)                         │
+│  ────────────────────────────────────────────────────────────               │
+│  Convert the expanded text into a vector (array of numbers):                │
+│                                                                             │
+│  Text: "A comprehensive weather API..."                                     │
+│           ↓                                                                 │
+│  OpenAI text-embedding-3-small                                              │
+│           ↓                                                                 │
+│  Vector: [0.023, -0.041, 0.089, ...] (1536 dimensions)                      │
+│                                                                             │
+│  WHY? Vectors allow semantic similarity comparison.                         │
+│  "weather forecast" and "meteorological predictions" will have              │
+│  similar vectors even though the words are different.                       │
+│                                                                             │
+│  STEP 3: VECTOR SEARCH (search/vectorStore.ts)                              │
+│  ────────────────────────────────────────────────────────────               │
+│  Search Supabase for tools with similar description embeddings:             │
+│                                                                             │
+│  Query Vector: [0.023, -0.041, ...]                                         │
+│           ↓                                                                 │
+│  Supabase RPC: match_tools_orchestrator(                                    │
+│    query_embedding: [0.023, -0.041, ...],                                   │
+│    match_threshold: 0.5,    // Minimum 50% similarity                       │
+│    match_count: 10          // Return top 10                                │
+│  )                                                                          │
+│           ↓                                                                 │
+│  Results:                                                                   │
+│  1. "Test Weather API" - similarity: 0.89                                   │
+│  2. "Climate Data Service" - similarity: 0.72                               │
+│  3. "Air Quality Monitor" - similarity: 0.58                                │
+│                                                                             │
+│  HOW? Supabase uses pgvector extension for cosine similarity:               │
+│  1 - (query_embedding <=> stored_embedding)                                 │
+│                                                                             │
+│  STEP 4: FILTERING (selection/filters.ts)                                   │
+│  ────────────────────────────────────────────────────────────               │
+│  Apply user's constraints:                                                  │
+│                                                                             │
+│  User Preferences:                                                          │
+│    max_price_cap: 0.01         // Max $0.01 per call                        │
+│    min_rating_threshold: 3.0   // At least 3 stars                          │
+│                                                                             │
+│  Before filter: 3 tools                                                     │
+│  After filter: 2 tools (Air Quality filtered - too expensive)               │
+│                                                                             │
+│  STEP 5: RANKING (selection/ranking.ts)                                     │
+│  ────────────────────────────────────────────────────────────               │
+│  Sort by user's preferred strategy:                                         │
+│                                                                             │
+│  Strategy: "balanced"                                                       │
+│                                                                             │
+│  score = (rating / 5 * 0.6) + ((1 - price/0.01) * 0.4)                      │
+│                                                                             │
+│  Tool 1: score = (4.5/5 * 0.6) + (0.95 * 0.4) = 0.92                        │
+│  Tool 2: score = (3.0/5 * 0.6) + (0.90 * 0.4) = 0.72                        │
+│                                                                             │
+│  STEP 6: MODE DECISION (selection/index.ts)                                 │
+│  ────────────────────────────────────────────────────────────               │
+│                                                                             │
+│  IF discovery_mode = "auto":                                                │
+│    → Install the top-ranked tool automatically                              │
+│    → Retry the original request                                             │
+│                                                                             │
+│  IF discovery_mode = "manual":                                              │
+│    → Store candidates in pending state                                      │
+│    → Prompt user: "Please select a tool:"                                   │
+│      1. Test Weather API - $0.005/call - ★★★★☆                              │
+│      2. Climate Data - $0.001/call - ★★★☆☆                                  │
+│    → Wait for admin API call                                                │
+│                                                                             │
+│  STEP 7: INSTALLATION (provisioning/installer.ts)                           │
+│  ────────────────────────────────────────────────────────────               │
+│  Once a tool is selected:                                                   │
+│                                                                             │
+│  1. Generate canonical name: "Test_Weather_API__a1b2c3d4"                   │
+│  2. Save to user_tools_orchestrator table                                   │
+│  3. Trigger runtime refresh callbacks                                       │
+│                                                                             │
+│  OUTPUT: Tool installed, ready for use                                      │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-#### Isolated Executor
+#### Manual Mode Flow
 
-```typescript
-// codemode-standalone/src/execution/IsolatedExecutor.ts
-import ivm from 'isolated-vm';
+When `discovery_mode = "manual"`, the system pauses for human approval:
 
-export class IsolatedExecutor {
-  private securityPolicy: SecurityPolicyManager;
-  private executionContext: ExecutionContext;
-  
-  async execute<T = any>(code: string): Promise<ExecutionResult<T>> {
-    // Create isolated V8 instance with memory limits
-    const isolate = new ivm.Isolate({
-      memoryLimit: this.securityPolicy.getPolicy().maxMemoryMB,
-    });
-    
-    const context = await isolate.createContext();
-    
-    // Inject tool proxy into isolate
-    const toolCallbackRef = new ivm.Reference(
-      async (toolName: string, argsJson: string) => {
-        const args = JSON.parse(argsJson);
-        const result = await toolsProxy[toolName](args);
-        return JSON.stringify(result);
-      }
-    );
-    
-    await jail.set('__executeToolNative', toolCallbackRef);
-    
-    // Execute with timeout
-    const script = await isolate.compileScript(wrappedCode);
-    const result = await script.run(context, {
-      timeout: this.securityPolicy.getMaxExecutionTime(),
-      promise: true,
-    });
-    
-    isolate.dispose();
-    return { success: true, result, executionTime: Date.now() - startTime };
-  }
-}
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                          MANUAL MODE FLOW                                   │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  1. Discovery finds candidates, stores them:                                │
+│                                                                             │
+│     // discovery/interaction/pendingState.ts                                │
+│     storePendingChoices(requestId, userId, query, candidates)               │
+│     // Stored in memory Map with 5-minute expiration                        │
+│                                                                             │
+│  2. System outputs prompt to console:                                       │
+│                                                                             │
+│     ┌──────────────────────────────────────────────────────────────┐        │
+│     │  MANUAL SELECTION REQUIRED                                   │        │
+│     │  Request ID: req_1704518400_abc123                           │        │
+│     │  Query: "check weather"                                      │        │
+│     │                                                              │        │
+│     │  Candidates:                                                 │        │
+│     │  ┌────┬────────────────────┬─────────┬────────┐              │        │
+│     │  │ #  │ Name               │ Price   │ Rating │              │        │
+│     │  ├────┼────────────────────┼─────────┼────────┤              │        │
+│     │  │ 1  │ Test Weather API   │ $0.0050 │ ★★★★☆  │              │        │
+│     │  │ 2  │ Climate Data Svc   │ $0.0010 │ ★★★☆☆  │              │        │
+│     │  └────┴────────────────────┴─────────┴────────┘              │        │
+│     │                                                              │        │
+│     │  To select tool 1:                                           │        │
+│     │  curl -X POST http://localhost:8080/admin/select-tool \      │        │
+│     │    -H "Content-Type: application/json" \                     │        │
+│     │    -d '{"requestId":"req_...","toolId":"uuid","action":"select"}'    │
+│     └──────────────────────────────────────────────────────────────┘        │
+│                                                                             │
+│  3. Admin calls the API:                                                    │
+│                                                                             │
+│     POST /admin/select-tool                                                 │
+│     { "requestId": "req_...", "toolId": "uuid...", "action": "select" }     │
+│                                                                             │
+│  4. Admin route handler (server/admin.ts):                                  │
+│                                                                             │
+│     // Validate request exists and tool is in candidates                    │
+│     const pending = getPendingChoices(requestId);                           │
+│     const selectedTool = pending.candidates.find(t => t.id === toolId);     │
+│                                                                             │
+│     // Install the tool                                                     │
+│     await installTool(pending.userId, selectedTool);                        │
+│                                                                             │
+│     // Clear the pending state                                              │
+│     clearPendingChoices(requestId);                                         │
+│                                                                             │
+│  5. Response: { "success": true, "message": "Tool installed" }              │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
-#### Tool Calling Engine (Anthropic)
+---
 
-```typescript
-// codemode-standalone/src/llm/ToolCallingEngine.ts
-export class ToolCallingEngine {
-  private client: Anthropic;
-  private toolRegistry: ToolRegistry;
-  
-  async execute(request: ToolCallingRequest): Promise<ToolCallingResponse> {
-    const messages: Message[] = [{ role: 'user', content: request.task }];
-    
-    for (let turn = 0; turn < this.config.maxTurns; turn++) {
-      const response = await this.client.messages.create({
-        model: this.config.model,
-        messages,
-        tools: this.getAnthropicTools(),
-      });
-      
-      // Process tool calls
-      if (response.stop_reason === 'tool_use') {
-        for (const block of response.content) {
-          if (block.type === 'tool_use') {
-            const result = await this.toolRegistry.executeTool(block.name, block.input);
-            messages.push({ role: 'assistant', content: response.content });
-            messages.push({ role: 'user', content: [{ type: 'tool_result', tool_use_id: block.id, content: JSON.stringify(result) }] });
-          }
-        }
-      } else {
-        // Final response
-        return { success: true, response: extractTextContent(response) };
-      }
+### 4.4 CodeMode Execution Engine
+
+CodeMode allows AI agents to **generate and execute code** that calls MCP tools.
+
+#### Why CodeMode?
+
+Sometimes an AI needs to do complex operations:
+
+```
+AI: "Get all issues from my-repo, filter to bugs created this week,
+     and post a summary to Slack"
+
+WITHOUT CodeMode:
+  Tool call 1: github__list_issues → 150 issues
+  Tool call 2: Filter in AI's head (slow, error-prone)
+  Tool call 3: slack__post_message
+
+WITH CodeMode:
+  AI generates JavaScript:
+  ```javascript
+  const issues = await tools.github__list_issues({ repo: "my-repo" });
+  const bugs = issues.filter(i => 
+    i.labels.includes("bug") && 
+    new Date(i.created_at) > weekAgo
+  );
+  await tools.slack__post_message({ 
+    channel: "#bugs",
+    text: `Found ${bugs.length} new bugs this week`
+  });
+  return { summary: bugs.length };
+  ```
+```
+
+#### How It Works
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                          CODEMODE EXECUTION FLOW                            │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  INPUT: AI-generated code string                                            │
+│                                                                             │
+│  STEP 1: RUNNER SETUP (codemode/runner.ts)                                  │
+│  ────────────────────────────────────────────────────────────               │
+│                                                                             │
+│  async function runCode(params) {                                           │
+│    const { code, invoker, security } = params;                              │
+│                                                                             │
+│    // Build security limits                                                 │
+│    const limits = {                                                         │
+│      maxExecutionTime: 30000,  // 30 seconds                                │
+│      maxMemoryMB: 128,         // 128 MB                                    │
+│      maxToolCalls: 50,         // Prevent infinite loops                    │
+│    };                                                                       │
+│                                                                             │
+│    // Create a "registry" that routes all tool calls through invoker        │
+│    let toolCallCount = 0;                                                   │
+│    const registry = {                                                       │
+│      async executeTool(name, args) {                                        │
+│        toolCallCount++;                                                     │
+│        if (toolCallCount > limits.maxToolCalls) {                           │
+│          throw new Error("LimitExceeded: tool-calls");                      │
+│        }                                                                    │
+│        return invoker(name, args);  // Bridge to Jungle                     │
+│      },                                                                     │
+│      hasTool: () => true,  // Assume all tools exist                        │
+│    };                                                                       │
+│  }                                                                          │
+│                                                                             │
+│  STEP 2: ISOLATED EXECUTION (codemode-standalone)                           │
+│  ────────────────────────────────────────────────────────────               │
+│                                                                             │
+│  Uses isolated-vm to run code in a separate V8 isolate:                     │
+│                                                                             │
+│  // Create isolate with memory limit                                        │
+│  const isolate = new ivm.Isolate({                                          │
+│    memoryLimit: 128  // MB                                                  │
+│  });                                                                        │
+│                                                                             │
+│  // Create execution context                                                │
+│  const context = await isolate.createContext();                             │
+│                                                                             │
+│  // Inject the 'tools' proxy object                                         │
+│  // When code calls tools.github__list_issues(args),                        │
+│  // it bridges back to our registry.executeTool()                           │
+│  await jail.set('__executeToolNative', callbackRef);                        │
+│                                                                             │
+│  // Execute with timeout                                                    │
+│  const script = await isolate.compileScript(code);                          │
+│  const result = await script.run(context, {                                 │
+│    timeout: 30000,  // 30 second timeout                                    │
+│    promise: true,   // Handle async code                                    │
+│  });                                                                        │
+│                                                                             │
+│  SECURITY BOUNDARIES:                                                       │
+│  • Separate V8 process (memory isolation)                                   │
+│  • No access to Node.js APIs (require, process, etc.)                       │
+│  • No file system access                                                    │
+│  • No network access (except through tools)                                 │
+│  • Memory and time limits enforced                                          │
+│                                                                             │
+│  STEP 3: TOOL INVOCATION BRIDGE (codemode/invoker.ts)                       │
+│  ────────────────────────────────────────────────────────────               │
+│                                                                             │
+│  When code calls a tool, it bridges to Jungle:                              │
+│                                                                             │
+│  async function invokeTool(functionName, args, ctx) {                       │
+│    // Resolve which Jungle instance to use                                  │
+│    const decision = await resolveJungleEndpoint({ userId });                │
+│                                                                             │
+│    // Build JSON-RPC request                                                │
+│    const body = {                                                           │
+│      jsonrpc: '2.0',                                                        │
+│      id: generateId(),                                                      │
+│      method: 'tools/call',                                                  │
+│      params: { name: functionName, arguments: args }                        │
+│    };                                                                       │
+│                                                                             │
+│    // POST to Jungle                                                        │
+│    const response = await postToJungle(body, {                              │
+│      userId,                                                                │
+│      useSession: true,  // Include MCP session ID                           │
+│      baseUrl: decision.baseUrl                                              │
+│    });                                                                      │
+│                                                                             │
+│    // Parse and return result                                               │
+│    const json = await response.json();                                      │
+│    if (json.error) throw new Error(json.error.message);                     │
+│    return json.result;                                                      │
+│  }                                                                          │
+│                                                                             │
+│  OUTPUT: { result: { summary: 5 }, executionTime: 1234 }                    │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 5. Data Flow Patterns
+
+### Pattern 1: Simple Tool Call
+
+```
+AI Agent                      Orchestrator                    Jungle                    Upstream
+   │                              │                             │                           │
+   │ POST /mcp                    │                             │                           │
+   │ tools/call "github__..."     │                             │                           │
+   ├─────────────────────────────>│                             │                           │
+   │                              │ resolveJungleEndpoint()     │                           │
+   │                              │ → shared mode               │                           │
+   │                              │                             │                           │
+   │                              │ POST /mcp                   │                           │
+   │                              │ tools/call "github__..."    │                           │
+   │                              ├────────────────────────────>│                           │
+   │                              │                             │ Split: github + tool      │
+   │                              │                             │ Look up github config     │
+   │                              │                             │                           │
+   │                              │                             │ POST /mcp                 │
+   │                              │                             │ tools/call "..."          │
+   │                              │                             ├──────────────────────────>│
+   │                              │                             │                           │
+   │                              │                             │<──────────────────────────┤
+   │                              │                             │ Result                    │
+   │                              │<────────────────────────────┤                           │
+   │<─────────────────────────────┤ Result                      │                           │
+   │ Result                       │                             │                           │
+```
+
+### Pattern 2: Discovery Flow
+
+```
+AI Agent                      Orchestrator                    Supabase                   Jungle
+   │                              │                             │                           │
+   │ POST /mcp                    │                             │                           │
+   │ tools/call "weather__..."    │                             │                           │
+   ├─────────────────────────────>│                             │                           │
+   │                              │ Forward to Jungle           │                           │
+   │                              ├──────────────────────────────────────────────────────>│
+   │                              │                             │                           │
+   │                              │<──────────────────────────────────────────────────────┤
+   │                              │ Error: Method not found     │                           │
+   │                              │                             │                           │
+   │                              │ Discovery triggered         │                           │
+   │                              │ expandQuery("weather")      │                           │
+   │                              │ → "A weather API..."        │                           │
+   │                              │                             │                           │
+   │                              │ generateEmbedding()         │                           │
+   │                              │ → [0.023, ...]              │                           │
+   │                              │                             │                           │
+   │                              │ RPC: match_tools()          │                           │
+   │                              ├────────────────────────────>│                           │
+   │                              │<────────────────────────────┤                           │
+   │                              │ Results: Weather API (0.89) │                           │
+   │                              │                             │                           │
+   │                              │ Filter & Rank               │                           │
+   │                              │ → Weather API wins          │                           │
+   │                              │                             │                           │
+   │                              │ Install tool                │                           │
+   │                              ├────────────────────────────>│                           │
+   │                              │                             │                           │
+   │                              │ Retry original request      │                           │
+   │                              ├──────────────────────────────────────────────────────>│
+   │                              │<──────────────────────────────────────────────────────┤
+   │<─────────────────────────────┤ Result (this time it works!)│                           │
+```
+
+### Pattern 3: Per-User Provisioning
+
+```
+AI Agent                      Orchestrator                    Docker                     New Jungle
+   │                              │                             │                           │
+   │ POST /mcp                    │                             │                           │
+   │ X-User-Id: user-123          │                             │                           │
+   ├─────────────────────────────>│                             │                           │
+   │                              │ resolveJungleEndpoint()     │                           │
+   │                              │ → per_user mode             │                           │
+   │                              │ → no existing instance      │                           │
+   │                              │                             │                           │
+   │                              │ DockerProvisioner.provision │                           │
+   │                              ├────────────────────────────>│                           │
+   │                              │                             │ docker run jungle-user123│
+   │                              │                             │ -p 0:9000                │
+   │                              │                             ├─────────────────────────>│
+   │                              │                             │                           │
+   │                              │<────────────────────────────┤                           │
+   │                              │ { baseUrl: localhost:54321 }│                           │
+   │                              │                             │                           │
+   │                              │ Store mapping               │                           │
+   │                              │ user-123 → localhost:54321  │                           │
+   │                              │                             │                           │
+   │                              │ Forward to new instance     │                           │
+   │                              ├──────────────────────────────────────────────────────>│
+   │                              │<──────────────────────────────────────────────────────┤
+   │<─────────────────────────────┤                             │                           │
+```
+
+---
+
+## 6. The MCP Protocol Explained
+
+### What is MCP?
+
+MCP (Model Context Protocol) is a standard for AI agents to interact with tools. Think of it like HTTP for AI tool calls.
+
+### Message Format
+
+MCP uses JSON-RPC 2.0:
+
+```javascript
+// REQUEST
+{
+  "jsonrpc": "2.0",          // Always "2.0"
+  "id": 1,                   // Unique ID for this request
+  "method": "tools/call",    // What you're doing
+  "params": {                // Parameters for the method
+    "name": "github__create_issue",
+    "arguments": {
+      "repo": "my-org/my-repo",
+      "title": "Bug report"
     }
   }
 }
+
+// SUCCESS RESPONSE
+{
+  "jsonrpc": "2.0",
+  "id": 1,                   // Same ID as request
+  "result": {
+    "content": [
+      { "type": "text", "text": "Issue #42 created" }
+    ]
+  }
+}
+
+// ERROR RESPONSE
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "error": {
+    "code": -32601,          // Standard error code
+    "message": "Method not found",
+    "data": { "method": "weather__get_forecast" }
+  }
+}
+```
+
+### Available Methods
+
+| Method | Description | Example Params |
+|--------|-------------|----------------|
+| `initialize` | Start session | `{ protocolVersion: "2024-11-05" }` |
+| `tools/list` | List available tools | `{}` |
+| `tools/call` | Call a tool | `{ name: "...", arguments: {...} }` |
+| `cancel` | Cancel a request | `{ id: 1 }` |
+
+### Session Management
+
+MCP requires sessions for stateful operations:
+
+```
+1. Client sends: initialize
+2. Server responds with session ID in header: Mcp-Session-Id: abc123
+3. Client includes header in all subsequent requests
+4. Sessions expire after inactivity
 ```
 
 ---
 
-## 4. Data Layer
+## 7. Database Architecture
 
-### 4.1 Local SQLite Database (Go Service)
+### Local SQLite (Jungle)
 
-The Go service uses SQLite for local persistence of registered MCP servers and tools.
-
-#### Schema (GORM Models)
+Stored at `mcpjungle.db`, managed by GORM.
 
 ```sql
--- MCP Servers
+-- MCP Servers (where to connect)
 CREATE TABLE mcp_servers (
-  id          INTEGER PRIMARY KEY AUTOINCREMENT,
-  created_at  DATETIME,
-  updated_at  DATETIME,
-  deleted_at  DATETIME,
-  name        TEXT UNIQUE NOT NULL,
-  transport   VARCHAR(30) NOT NULL,  -- 'stdio', 'http', 'sse'
+  id          INTEGER PRIMARY KEY,
+  name        TEXT UNIQUE NOT NULL,     -- "github"
+  transport   VARCHAR(30) NOT NULL,     -- "http", "stdio", "sse"
   description TEXT,
-  config      JSONB NOT NULL         -- Transport-specific config
+  config      JSON NOT NULL             -- Transport-specific config
 );
 
--- Tools
+-- Tools (what you can call)
 CREATE TABLE tools (
-  id           INTEGER PRIMARY KEY AUTOINCREMENT,
-  created_at   DATETIME,
-  updated_at   DATETIME,
-  deleted_at   DATETIME,
-  name         TEXT NOT NULL,
+  id           INTEGER PRIMARY KEY,
+  name         TEXT NOT NULL,           -- "create_issue" (no prefix)
   enabled      BOOLEAN DEFAULT TRUE,
   description  TEXT,
-  input_schema JSONB,
-  server_id    INTEGER NOT NULL REFERENCES mcp_servers(id)
+  input_schema JSON,                    -- JSON Schema for validation
+  server_id    INTEGER REFERENCES mcp_servers(id)
 );
 
--- MCP Clients (Enterprise mode)
-CREATE TABLE mcp_clients (
-  id           INTEGER PRIMARY KEY AUTOINCREMENT,
-  name         TEXT UNIQUE NOT NULL,
-  description  TEXT,
-  access_token TEXT UNIQUE NOT NULL,
-  allow_list   JSONB NOT NULL  -- Array of server names
-);
+-- Example data:
+INSERT INTO mcp_servers VALUES (1, 'github', 'http', 'GitHub API', 
+  '{"url": "https://api.github.com/mcp", "bearer_token": "ghp_xxx"}');
 
--- Tool Groups
-CREATE TABLE tool_groups (
-  id               INTEGER PRIMARY KEY AUTOINCREMENT,
-  name             TEXT UNIQUE NOT NULL,
-  description      TEXT,
-  included_tools   JSONB,  -- Array of tool names
-  included_servers JSONB,  -- Array of server names
-  excluded_tools   JSONB   -- Array of tool names to exclude
-);
-
--- Server Config
-CREATE TABLE server_configs (
-  id          INTEGER PRIMARY KEY AUTOINCREMENT,
-  initialized BOOLEAN DEFAULT FALSE,
-  mode        VARCHAR(30)  -- 'development', 'enterprise'
-);
-
--- Users (Enterprise mode)
-CREATE TABLE users (
-  id            INTEGER PRIMARY KEY AUTOINCREMENT,
-  username      TEXT UNIQUE NOT NULL,
-  access_token  TEXT UNIQUE NOT NULL,
-  is_admin      BOOLEAN DEFAULT FALSE
-);
+INSERT INTO tools VALUES (1, 'create_issue', TRUE, 
+  'Creates a GitHub issue', '{"type":"object",...}', 1);
 ```
 
-### 4.2 Supabase Cloud Database (Discovery)
+### Supabase Cloud (Discovery)
 
-The Orchestrator uses Supabase for cloud-based tool discovery and user preferences.
-
-#### Existing Tables (Read-Only)
+Used by the Orchestrator for tool discovery and user preferences.
 
 ```sql
--- Tools table (managed externally, read-only for orchestrator)
+-- EXISTING TABLE (Read-only for orchestrator)
+-- This is the marketplace of available tools
 CREATE TABLE tools (
-  id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  created_at     TIMESTAMPTZ DEFAULT now(),
-  merchant_id    UUID NOT NULL REFERENCES merchants(id),
-  name           VARCHAR NOT NULL,
-  description    VARCHAR NOT NULL,
-  endpoint_url   VARCHAR NOT NULL,  -- The actual MCP endpoint
-  price_per_call REAL NOT NULL,
-  average_rating REAL NOT NULL,
-  updated_at     TIMESTAMP DEFAULT now(),
-  listing_status listing_status_enum NOT NULL  -- 'ACTIVE', 'INACTIVE'
+  id             UUID PRIMARY KEY,
+  name           VARCHAR NOT NULL,        -- "Weather API"
+  description    VARCHAR NOT NULL,        -- For semantic search
+  endpoint_url   VARCHAR NOT NULL,        -- Where to call it
+  price_per_call REAL NOT NULL,           -- Cost per invocation
+  average_rating REAL NOT NULL,           -- User rating
+  listing_status TEXT NOT NULL            -- 'ACTIVE' or 'INACTIVE'
 );
 
--- Users table (Supabase Auth integration)
-CREATE TABLE users (
-  uid          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  auth_id      UUID REFERENCES auth.users(id),
-  account_type account_type_enum,  -- 'ADMIN', 'MERCHANT', 'AGENT'
-  name         VARCHAR,
-  dob          DATE,
-  created_at   TIMESTAMPTZ DEFAULT now()
-);
-
--- Merchants table
-CREATE TABLE merchants (
-  id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id      UUID REFERENCES users(uid),
-  trust_rating REAL,
-  created_at   TIMESTAMPTZ DEFAULT now()
-);
-```
-
-#### Orchestrator Tables (Writable, suffix `_orchestrator`)
-
-```sql
--- User preferences for tool discovery
-CREATE TABLE user_preferences_orchestrator (
-  user_id              UUID PRIMARY KEY,
-  discovery_mode       TEXT DEFAULT 'manual' CHECK (discovery_mode IN ('auto', 'manual')),
-  auto_install_strategy TEXT DEFAULT 'balanced' CHECK (auto_install_strategy IN ('cheapest', 'rating', 'balanced')),
-  max_price_cap        REAL DEFAULT 1.0,
-  min_rating_threshold REAL DEFAULT 3.0,
-  created_at           TIMESTAMPTZ DEFAULT now(),
-  updated_at           TIMESTAMPTZ DEFAULT now()
-);
-
--- Vector embeddings for tool descriptions
+-- ORCHESTRATOR TABLE: Vector embeddings for search
 CREATE TABLE tool_embeddings_orchestrator (
-  id                    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  id                    UUID PRIMARY KEY,
   tool_id               UUID UNIQUE REFERENCES tools(id),
-  description_embedding VECTOR(1536),  -- OpenAI text-embedding-3-small
-  created_at            TIMESTAMPTZ DEFAULT now(),
-  updated_at            TIMESTAMPTZ DEFAULT now()
+  description_embedding VECTOR(1536),      -- OpenAI embedding
+  created_at            TIMESTAMPTZ
 );
 
--- Installed tools per user
+-- ORCHESTRATOR TABLE: User preferences
+CREATE TABLE user_preferences_orchestrator (
+  user_id               UUID PRIMARY KEY,
+  discovery_mode        TEXT DEFAULT 'manual',    -- 'auto' or 'manual'
+  auto_install_strategy TEXT DEFAULT 'balanced',  -- 'cheapest', 'rating', 'balanced'
+  max_price_cap         REAL DEFAULT 1.0,         -- Max $/call
+  min_rating_threshold  REAL DEFAULT 3.0,         -- Min stars
+  created_at            TIMESTAMPTZ
+);
+
+-- ORCHESTRATOR TABLE: Installed tools per user
 CREATE TABLE user_tools_orchestrator (
-  id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id       UUID NOT NULL,
-  tool_id       UUID NOT NULL REFERENCES tools(id),
-  canonical_name TEXT NOT NULL,  -- e.g., "github__create_issue"
-  installed_at  TIMESTAMPTZ DEFAULT now(),
-  is_active     BOOLEAN DEFAULT TRUE,
-  UNIQUE (user_id, tool_id)
+  id             UUID PRIMARY KEY,
+  user_id        UUID NOT NULL,
+  tool_id        UUID REFERENCES tools(id),
+  canonical_name TEXT NOT NULL,           -- "Weather_API__a1b2c3d4"
+  installed_at   TIMESTAMPTZ,
+  is_active      BOOLEAN DEFAULT TRUE
 );
-```
 
-#### Vector Search Function (RPC)
-
-```sql
--- Supabase function for semantic search
-CREATE OR REPLACE FUNCTION match_tools_orchestrator(
+-- Vector search function
+CREATE FUNCTION match_tools_orchestrator(
   query_embedding VECTOR(1536),
-  match_threshold FLOAT DEFAULT 0.5,
-  match_count INT DEFAULT 10
-)
-RETURNS TABLE (
-  id UUID,
-  name VARCHAR,
-  description VARCHAR,
-  endpoint_url VARCHAR,
-  price_per_call REAL,
-  average_rating REAL,
-  listing_status listing_status_enum,
-  similarity FLOAT
-)
-LANGUAGE plpgsql AS $$
-BEGIN
-  RETURN QUERY
-  SELECT
-    t.id,
-    t.name,
-    t.description,
-    t.endpoint_url,
-    t.price_per_call,
-    t.average_rating,
-    t.listing_status,
-    1 - (e.description_embedding <=> query_embedding) AS similarity
+  match_threshold FLOAT,
+  match_count INT
+) RETURNS TABLE (id UUID, name VARCHAR, similarity FLOAT, ...)
+AS $$
+  SELECT t.*, 1 - (e.description_embedding <=> query_embedding) AS similarity
   FROM tools t
-  INNER JOIN tool_embeddings_orchestrator e ON t.id = e.tool_id
-  WHERE t.listing_status = 'ACTIVE'
-    AND 1 - (e.description_embedding <=> query_embedding) > match_threshold
-  ORDER BY e.description_embedding <=> query_embedding
+  JOIN tool_embeddings_orchestrator e ON t.id = e.tool_id
+  WHERE 1 - (e.description_embedding <=> query_embedding) > match_threshold
+  ORDER BY similarity DESC
   LIMIT match_count;
-END;
 $$;
 ```
 
 ---
 
-## 5. MCP Protocol Implementation
+## 8. Integration Guide
 
-### Protocol Version
+### Adding Lambda Support
 
-MCPJungle implements MCP Protocol version `2024-11-05`.
-
-### Supported Transports
-
-| Transport | Description | Configuration |
-|-----------|-------------|---------------|
-| **stdio** | Command-line process | `command`, `args`, `env` |
-| **streamable-http** | HTTP with streaming | `url`, `bearer_token` |
-| **sse** | Server-Sent Events | `url`, `bearer_token` |
-
-### JSON-RPC Message Format
+To add AWS Lambda as a provisioning option:
 
 ```typescript
-// Request
-interface JsonRpcRequest {
-  jsonrpc: '2.0';
-  id: string | number;
-  method: string;
-  params?: Record<string, unknown>;
-}
+// orchestrator/src/provisioning/lambda.ts
 
-// Response (success)
-interface JsonRpcSuccess {
-  jsonrpc: '2.0';
-  id: string | number;
-  result: unknown;
-}
+import { Provisioner } from './types.js';
+import { LambdaClient, CreateFunctionCommand } from '@aws-sdk/client-lambda';
 
-// Response (error)
-interface JsonRpcError {
-  jsonrpc: '2.0';
-  id: string | number | null;
-  error: {
-    code: number;
-    message: string;
-    data?: unknown;
-  };
-}
-
-// Error codes
-const JSON_RPC_ERRORS = {
-  PARSE_ERROR: -32700,
-  INVALID_REQUEST: -32600,
-  METHOD_NOT_FOUND: -32601,
-  INVALID_PARAMS: -32602,
-  INTERNAL_ERROR: -32603,
-  SERVER_ERROR: -32000,
-};
-```
-
-### Supported Methods
-
-| Method | Description |
-|--------|-------------|
-| `initialize` | Initialize MCP session |
-| `tools/list` | List available tools |
-| `tools/call` | Call a specific tool |
-| `cancel` | Cancel an in-progress request |
-
-### Tool Schema
-
-```typescript
-interface MCPTool {
-  name: string;
-  description?: string;
-  inputSchema: {
-    type: 'object';
-    properties?: Record<string, JSONSchema>;
-    required?: string[];
-  };
-}
-
-interface CallToolRequest {
-  method: 'tools/call';
-  params: {
-    name: string;
-    arguments?: Record<string, unknown>;
-  };
-}
-
-interface CallToolResult {
-  content: Array<{
-    type: 'text' | 'image' | 'resource';
-    text?: string;
-    // ... other content types
-  }>;
-  isError?: boolean;
-}
-```
-
----
-
-## 6. Discovery System (Epic 4)
-
-The Discovery System enables automatic finding and installation of MCP tools based on semantic search.
-
-### Architecture
-
-```
-┌─────────────────────────────────────────────────────────────────────────────────┐
-│                              DISCOVERY FLOW                                     │
-├─────────────────────────────────────────────────────────────────────────────────┤
-│                                                                                 │
-│  User Query: "I need to check weather"                                          │
-│                    │                                                            │
-│                    ▼                                                            │
-│  ┌─────────────────────────────────────┐                                        │
-│  │  1. QUERY EXPANSION (HyDE)          │                                        │
-│  │  ───────────────────────────────────│                                        │
-│  │  Input: "check weather"             │                                        │
-│  │  LLM: GPT-4o-mini                   │                                        │
-│  │  Output: "A comprehensive weather   │                                        │
-│  │  API for getting current conditions │                                        │
-│  │  and forecasts by location..."      │                                        │
-│  └──────────────────┬──────────────────┘                                        │
-│                     │                                                           │
-│                     ▼                                                           │
-│  ┌─────────────────────────────────────┐                                        │
-│  │  2. EMBEDDING GENERATION            │                                        │
-│  │  ───────────────────────────────────│                                        │
-│  │  Model: text-embedding-3-small      │                                        │
-│  │  Dimension: 1536                    │                                        │
-│  │  Output: [0.023, -0.041, ...]       │                                        │
-│  └──────────────────┬──────────────────┘                                        │
-│                     │                                                           │
-│                     ▼                                                           │
-│  ┌─────────────────────────────────────┐                                        │
-│  │  3. VECTOR SEARCH (Supabase)        │                                        │
-│  │  ───────────────────────────────────│                                        │
-│  │  RPC: match_tools_orchestrator      │                                        │
-│  │  Similarity: Cosine distance        │                                        │
-│  │  Output: Tools sorted by similarity │                                        │
-│  └──────────────────┬──────────────────┘                                        │
-│                     │                                                           │
-│                     ▼                                                           │
-│  ┌─────────────────────────────────────┐                                        │
-│  │  4. FILTERING & RANKING             │                                        │
-│  │  ───────────────────────────────────│                                        │
-│  │  - Apply max_price_cap filter       │                                        │
-│  │  - Apply min_rating_threshold       │                                        │
-│  │  - Sort by strategy:                │                                        │
-│  │    * cheapest: price ASC            │                                        │
-│  │    * rating: rating DESC            │                                        │
-│  │    * balanced: weighted score       │                                        │
-│  └──────────────────┬──────────────────┘                                        │
-│                     │                                                           │
-│           ┌─────────┴─────────┐                                                 │
-│           │                   │                                                 │
-│           ▼                   ▼                                                 │
-│  ┌────────────────┐  ┌────────────────┐                                         │
-│  │  AUTO MODE     │  │  MANUAL MODE   │                                         │
-│  │  ─────────────-│  │  ─────────────-│                                         │
-│  │  Install top   │  │  Prompt user   │                                         │
-│  │  ranked tool   │  │  with options  │                                         │
-│  │  automatically │  │  Wait for      │                                         │
-│  │                │  │  selection     │                                         │
-│  └────────┬───────┘  └────────┬───────┘                                         │
-│           │                   │                                                 │
-│           └─────────┬─────────┘                                                 │
-│                     │                                                           │
-│                     ▼                                                           │
-│  ┌─────────────────────────────────────┐                                        │
-│  │  5. INSTALLATION                    │                                        │
-│  │  ───────────────────────────────────│                                        │
-│  │  - Write to user_tools_orchestrator │                                        │
-│  │  - Generate canonical name          │                                        │
-│  │  - Refresh runtime (if applicable)  │                                        │
-│  └─────────────────────────────────────┘                                        │
-│                                                                                 │
-└─────────────────────────────────────────────────────────────────────────────────┘
-```
-
-### Key Modules
-
-#### Supabase Client
-
-```typescript
-// orchestrator/src/discovery/supabase/client.ts
-let supabaseClient: SupabaseClient | null = null;
-
-export function initializeSupabaseClient(config?: SupabaseConfig): SupabaseClient {
-  const cfg = config || getSupabaseConfig();
-  supabaseClient = createClient(cfg.url, cfg.key);
-  return supabaseClient;
-}
-
-export function getSupabaseClient(): SupabaseClient {
-  if (!supabaseClient) {
-    return initializeSupabaseClient();
+export class LambdaProvisioner implements Provisioner {
+  private client: LambdaClient;
+  
+  constructor(config: { region: string }) {
+    this.client = new LambdaClient({ region: config.region });
   }
-  return supabaseClient;
+  
+  async provision(userId: string): Promise<{ baseUrl: string }> {
+    // 1. Create Lambda function for this user
+    const functionName = `jungle-${userId}`;
+    
+    await this.client.send(new CreateFunctionCommand({
+      FunctionName: functionName,
+      Runtime: 'nodejs20.x',
+      Handler: 'index.handler',
+      Code: {
+        S3Bucket: 'mcpjungle-packages',
+        S3Key: 'jungle-lambda.zip',
+      },
+      Environment: {
+        Variables: { USER_ID: userId },
+      },
+    }));
+    
+    // 2. Create API Gateway endpoint
+    const apiUrl = await this.createApiGateway(functionName);
+    
+    return { baseUrl: apiUrl };
+  }
+  
+  async stop(userId: string): Promise<void> {
+    // Delete Lambda function and API Gateway
+  }
+  
+  async isHealthy(baseUrl: string): Promise<boolean> {
+    // Ping the Lambda endpoint
+  }
+}
+
+// Register in types.ts
+export async function getProvisioner(): Promise<Provisioner> {
+  switch (cfg.provisioner) {
+    case 'lambda':
+      return new LambdaProvisioner({ region: cfg.awsRegion });
+    // ...existing cases...
+  }
 }
 ```
 
-#### Query Expansion
+### Connecting External Tool Endpoints
+
+To call tools that are already deployed externally:
 
 ```typescript
-// orchestrator/src/discovery/search/queryExpansion.ts
-export const EXPANSION_SYSTEM_PROMPT = `You are a tool discovery assistant.
-Given a user's query about what they want to accomplish, generate an ideal tool description.
-Focus on: functionality, input/output, common use cases.
-Output ONLY the description, 2-4 sentences.`;
+// In your tool call handler, instead of proxying to Jungle,
+// you could forward directly to the tool's endpoint_url:
 
-export async function expandQuery(userQuery: string): Promise<string> {
-  const response = await fetch('https://api.openai.com/v1/chat/completions', {
+async function callExternalTool(tool: Tool, args: unknown) {
+  // Tool has endpoint_url from Supabase
+  const response = await fetch(tool.endpoint_url, {
     method: 'POST',
     headers: {
-      'Authorization': `Bearer ${config.apiKey}`,
       'Content-Type': 'application/json',
+      // Add any required auth
     },
     body: JSON.stringify({
-      model: 'gpt-4o-mini',
-      messages: [
-        { role: 'system', content: EXPANSION_SYSTEM_PROMPT },
-        { role: 'user', content: userQuery },
-      ],
-      max_tokens: 300,
-      temperature: 0.7,
+      jsonrpc: '2.0',
+      method: 'tools/call',
+      params: { arguments: args },
     }),
   });
   
-  const data = await response.json();
-  return data.choices[0].message.content.trim();
+  return response.json();
 }
 ```
 
-#### Embedding Generation
+### Adding a New Selection Strategy
 
 ```typescript
-// orchestrator/src/discovery/search/embedding.ts
-export const DEFAULT_MODEL = 'text-embedding-3-small';
-export const EMBEDDING_DIMENSION = 1536;
-
-export async function generateEmbedding(text: string): Promise<number[]> {
-  const response = await fetch('https://api.openai.com/v1/embeddings', {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${config.apiKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      model: DEFAULT_MODEL,
-      input: text,
-    }),
-  });
-  
-  const data = await response.json();
-  return data.data[0].embedding;
-}
-```
-
-#### Vector Search
-
-```typescript
-// orchestrator/src/discovery/search/vectorStore.ts
-export async function findSimilarTools(
-  embedding: number[],
-  options?: VectorSearchOptions
-): Promise<ToolWithScore[]> {
-  const client = getSupabaseClient();
-  
-  const { data, error } = await client.rpc('match_tools_orchestrator', {
-    query_embedding: embedding,
-    match_threshold: options?.matchThreshold ?? 0.5,
-    match_count: options?.matchCount ?? 10,
-  });
-  
-  if (error) throw new VectorSearchError(error.message);
-  
-  return data.map(mapToToolWithScore);
-}
-```
-
-#### Filtering & Ranking
-
-```typescript
-// orchestrator/src/discovery/selection/filters.ts
-export function filterTools<T extends FilterableTool>(
-  tools: T[],
-  prefs: { maxPriceCap?: number | null; minRatingThreshold?: number | null }
-): T[] {
-  return tools.filter(tool => {
-    if (prefs.maxPriceCap != null && tool.price_per_call > prefs.maxPriceCap) {
-      return false;
-    }
-    if (prefs.minRatingThreshold != null && tool.average_rating >= 0 && tool.average_rating < prefs.minRatingThreshold) {
-      return false;
-    }
-    return true;
-  });
-}
-
 // orchestrator/src/discovery/selection/ranking.ts
+
+export type SortStrategy = 'cheapest' | 'rating' | 'balanced' | 'similarity';
+
 export function rankTools<T extends RankableTool>(
   tools: T[],
   strategy: SortStrategy
 ): T[] {
-  const sorted = [...tools];
-  
   switch (strategy) {
+    case 'similarity':
+      // New strategy: prioritize semantic match
+      return tools.sort((a, b) => 
+        (b.similarity ?? 0) - (a.similarity ?? 0)
+      );
+    
     case 'cheapest':
-      sorted.sort((a, b) => a.price_per_call - b.price_per_call);
-      break;
+      return tools.sort((a, b) => 
+        a.price_per_call - b.price_per_call
+      );
+    
     case 'rating':
-      sorted.sort((a, b) => b.average_rating - a.average_rating);
-      break;
+      return tools.sort((a, b) => 
+        b.average_rating - a.average_rating
+      );
+    
     case 'balanced':
-      sorted.sort((a, b) => calculateBalancedScore(b) - calculateBalancedScore(a));
-      break;
+      return tools.sort((a, b) => 
+        calculateBalancedScore(b) - calculateBalancedScore(a)
+      );
   }
-  
-  return sorted;
 }
-
-export function calculateBalancedScore(tool: RankableTool): number {
-  const normalizedRating = Math.max(0, tool.average_rating) / 5;
-  const normalizedPrice = 1 - Math.min(1, tool.price_per_call / 0.01);
-  return (normalizedRating * 0.6) + (normalizedPrice * 0.4);
-}
-```
-
-#### Main Entry Point
-
-```typescript
-// orchestrator/src/discovery/index.ts
-export async function resolveMissingTool(
-  userId: string,
-  query: string
-): Promise<ResolveResult> {
-  // 1. Search for relevant tools
-  const tools = await searchTools(query);
-  
-  if (tools.length === 0) {
-    return { resolved: false, error: 'No matching tools found' };
-  }
-  
-  // 2. Get user preferences
-  const prefs = await getUserPreferences(userId);
-  
-  // 3. Filter and rank
-  const selection = selectBestTool(tools, prefs);
-  
-  if (selection.candidates.length === 0) {
-    return { resolved: false, error: 'All tools filtered out' };
-  }
-  
-  // 4. Handle auto vs manual mode
-  if (selection.mode === 'manual') {
-    const requestId = generateRequestId();
-    storePendingChoices(requestId, userId, query, selection.candidates);
-    requestUserSelection(requestId, selection.candidates, query);
-    return { resolved: false, manualMode: true, requestId };
-  }
-  
-  // 5. Auto-install
-  const installResult = await installTool(userId, selection.autoSelected);
-  
-  return {
-    resolved: true,
-    selectedTool: selection.autoSelected,
-    installResult,
-  };
-}
-```
-
-### Admin API for Manual Mode
-
-```typescript
-// orchestrator/src/server/admin.ts
-export function createAdminRouter(): Router {
-  const router = Router();
-  
-  // Select a tool from pending choices
-  router.post('/select-tool', async (req, res) => {
-    const { requestId, toolId, action } = req.body;
-    
-    const pending = getPendingChoices(requestId);
-    if (!pending) {
-      return res.status(404).json({ error: 'Not found' });
-    }
-    
-    if (action === 'reject') {
-      clearPendingChoices(requestId);
-      return res.json({ success: true, message: 'Selection rejected' });
-    }
-    
-    // Install selected tool
-    const tool = pending.candidates.find(t => t.id === toolId);
-    await installTool(pending.userId, tool);
-    clearPendingChoices(requestId);
-    
-    return res.json({ success: true, message: 'Tool installed' });
-  });
-  
-  // List pending selections
-  router.get('/pending', (req, res) => { ... });
-  
-  // Health check
-  router.get('/health', (req, res) => { ... });
-  
-  return router;
-}
-```
-
----
-
-## 7. Routing & Provisioning
-
-### Routing Modes
-
-| Mode | Description | Use Case |
-|------|-------------|----------|
-| `shared` | All users share one Jungle instance | Simple deployments, low traffic |
-| `per_user` | Each user gets isolated instance | Multi-tenant, security isolation |
-
-### User-to-Instance Mapping
-
-```typescript
-// orchestrator/src/routing/store.ts
-type Entry = { baseUrl: string; expiresAt: number };
-const map = new Map<string, Entry>();
-
-export function set(userId: string, baseUrl: string, ttlMs?: number): void {
-  map.set(userId, { baseUrl, expiresAt: Date.now() + ttl });
-}
-
-export function get(userId: string): string | undefined {
-  const entry = map.get(userId);
-  if (!entry || Date.now() >= entry.expiresAt) {
-    map.delete(userId);
-    return undefined;
-  }
-  return entry.baseUrl;
-}
-```
-
-### Container Provisioning
-
-```typescript
-// Docker
-const dockerProvisioner = {
-  async provision(userId: string) {
-    await docker.run(`jungle-${userId}`, 'mcpjungle:latest', { port: '9000' });
-    return { baseUrl: `http://localhost:${assignedPort}` };
-  },
-  async stop(userId: string) {
-    await docker.rm(`jungle-${userId}`);
-  }
-};
-
-// Kubernetes
-const k8sProvisioner = {
-  async provision(userId: string) {
-    await k8s.createDeployment(`jungle-${userId}`, { ... });
-    await k8s.createService(`jungle-${userId}`, { ... });
-    return { baseUrl: `http://jungle-${userId}.svc.cluster.local:9000` };
-  }
-};
-```
-
-### Future: Lambda Provisioning
-
-**Integration Point for Lambda:**
-
-```typescript
-// orchestrator/src/provisioning/lambda.ts (TO BE IMPLEMENTED)
-export interface LambdaProvisioner extends Provisioner {
-  // For PUBLIC MCPs: use shared Lambda
-  invokeShared(toolId: string, params: unknown): Promise<unknown>;
-  
-  // For PRIVATE MCPs: create dedicated Lambda per user
-  provisionPrivate(userId: string, toolId: string): Promise<{ functionArn: string; apiUrl: string }>;
-  
-  // Manage lifecycle
-  warmUp(functionArn: string): Promise<void>;
-  teardown(functionArn: string): Promise<void>;
-}
-
-// Expected configuration
-interface LambdaConfig {
-  region: string;
-  s3Bucket: string;           // S3 bucket with MCP packages
-  executionRole: string;      // IAM role ARN
-  vpcConfig?: {
-    subnetIds: string[];
-    securityGroupIds: string[];
-  };
-  defaultMemory: number;      // MB
-  defaultTimeout: number;     // seconds
-}
-```
-
-**Required Data Model Extensions:**
-
-```sql
--- New table for MCP package metadata
-CREATE TABLE tools_metadata_orchestrator (
-  tool_id          UUID PRIMARY KEY REFERENCES tools(id),
-  deployment_type  TEXT CHECK (deployment_type IN ('PUBLIC', 'PRIVATE', 'EXTERNAL')),
-  s3_package_url   TEXT,          -- s3://bucket/mcps/{merchant}/{tool}/
-  lambda_arn       TEXT,          -- For shared public Lambdas
-  input_schema     JSONB,         -- MCP tool input schema
-  output_schema    JSONB,
-  timeout_ms       INT DEFAULT 30000,
-  memory_mb        INT DEFAULT 512,
-  requires_auth    BOOLEAN DEFAULT FALSE
-);
-
--- Track active Lambda instances
-CREATE TABLE lambda_instances_orchestrator (
-  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id         UUID NOT NULL,
-  tool_id         UUID NOT NULL REFERENCES tools(id),
-  function_arn    TEXT NOT NULL,
-  api_gateway_url TEXT,
-  status          TEXT CHECK (status IN ('CREATING', 'ACTIVE', 'WARMING', 'TERMINATING', 'TERMINATED')),
-  created_at      TIMESTAMPTZ DEFAULT now(),
-  last_invoked_at TIMESTAMPTZ,
-  expires_at      TIMESTAMPTZ
-);
-```
-
----
-
-## 8. CodeMode Execution Engine
-
-### Flow
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                         CODEMODE EXECUTION FLOW                             │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                                                                             │
-│  1. AI generates code:                                                      │
-│     ```javascript                                                           │
-│     const weather = await tools.weather_get({ city: "London" });            │
-│     return { temp: weather.temperature };                                   │
-│     ```                                                                     │
-│                                                                             │
-│  2. runCode() is called:                                                    │
-│     ┌───────────────────────────────────────────────┐                       │
-│     │  orchestrator/src/codemode/runner.ts          │                       │
-│     │  ─────────────────────────────────────────────│                       │
-│     │  - Build security limits                      │                       │
-│     │  - Create tool registry facade               │                       │
-│     │  - Initialize IsolatedExecutor               │                       │
-│     │  - Wrap code with `const codemode = tools;`  │                       │
-│     └───────────────────────────────────────────────┘                       │
-│                                                                             │
-│  3. IsolatedExecutor runs code:                                             │
-│     ┌───────────────────────────────────────────────┐                       │
-│     │  codemode-standalone/execution/IsolatedExecutor│                      │
-│     │  ─────────────────────────────────────────────│                       │
-│     │  - Create V8 isolate with memory limit       │                       │
-│     │  - Inject tool proxy                         │                       │
-│     │  - Run with timeout                          │                       │
-│     └───────────────────────────────────────────────┘                       │
-│                                                                             │
-│  4. Tool calls bridge back to orchestrator:                                 │
-│     ┌───────────────────────────────────────────────┐                       │
-│     │  orchestrator/src/codemode/invoker.ts         │                       │
-│     │  ─────────────────────────────────────────────│                       │
-│     │  - invokeTool() called                       │                       │
-│     │  - Route resolved (shared/per_user)          │                       │
-│     │  - POST to Jungle /mcp with tools/call       │                       │
-│     │  - Response returned to isolate              │                       │
-│     └───────────────────────────────────────────────┘                       │
-│                                                                             │
-│  5. Final result returned                                                   │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
-
-### Security Limits
-
-```typescript
-// orchestrator/src/codemode/policy.ts
-export interface SecurityLimits {
-  maxExecutionTime: number;  // Default: 30000ms
-  maxMemoryMB: number;       // Default: 128
-  maxToolCalls: number;      // Default: 50
-  allowNetworkAccess: boolean;
-  allowFileAccess: boolean;
-}
-
-export function buildLimits(overrides?: Partial<SecurityLimits>): SecurityLimits {
-  return {
-    maxExecutionTime: 30000,
-    maxMemoryMB: 128,
-    maxToolCalls: 50,
-    allowNetworkAccess: false,
-    allowFileAccess: false,
-    ...overrides,
-  };
-}
-```
-
-### Telemetry
-
-```typescript
-// orchestrator/src/codemode/telemetry.ts
-export function withRunSpan<T>(attrs: Record<string, unknown>, fn: () => Promise<T>): Promise<T>;
-export function withCompileSpan<T>(attrs: Record<string, unknown>, fn: () => Promise<T>): Promise<T>;
-export function withEvalSpan<T>(attrs: Record<string, unknown>, fn: () => Promise<T>): Promise<T>;
-export function withToolCallSpan<T>(name: string, attrs: Record<string, unknown>, fn: () => Promise<T>): Promise<T>;
-
-export function recordCompileMs(ms: number): void;
-export function recordEvalMs(ms: number): void;
-export function incToolCalls(count: number): void;
-export function incErrors(type: string): void;
 ```
 
 ---
 
 ## 9. API Reference
 
-### MCPJungle Registry (Go) - Port 8080
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/health` | GET | Health check |
-| `/metadata` | GET | Server version info |
-| `/mcp` | POST | MCP JSON-RPC endpoint |
-| `/sse` | ANY | SSE transport endpoint |
-| `/message` | ANY | SSE message endpoint |
-| `/init` | POST | Initialize server (enterprise) |
-| `/api/v0/servers` | GET | List registered servers |
-| `/api/v0/servers` | POST | Register new server |
-| `/api/v0/servers/:name` | DELETE | Deregister server |
-| `/api/v0/tools` | GET | List all tools |
-| `/api/v0/tools/invoke` | POST | Invoke a tool |
-| `/api/v0/tools/enable` | POST | Enable tools |
-| `/api/v0/tools/disable` | POST | Disable tools |
-| `/api/v0/clients` | GET/POST/DELETE | Manage MCP clients |
-| `/api/v0/users` | GET/POST/DELETE | Manage users |
-| `/api/v0/tool-groups` | CRUD | Manage tool groups |
-| `/v0/groups/:name/mcp` | ANY | Tool group MCP endpoint |
-
-### Orchestrator (TypeScript) - Port 8080
+### Orchestrator Endpoints
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
@@ -1497,417 +1347,97 @@ export function incErrors(type: string): void;
 | `/admin/pending` | GET | List pending selections |
 | `/admin/health` | GET | Admin API health |
 
-### MCP Protocol Methods
+### Jungle Endpoints
 
-| Method | Description |
-|--------|-------------|
-| `initialize` | Initialize session |
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/health` | GET | Health check |
+| `/mcp` | POST | MCP endpoint (streamable HTTP) |
+| `/sse` | GET | MCP endpoint (SSE) |
+| `/api/v0/servers` | GET/POST | List/register servers |
+| `/api/v0/tools` | GET | List tools |
+| `/api/v0/tools/invoke` | POST | Direct tool invocation |
+
+### MCP Methods
+
+| Method | Purpose |
+|--------|---------|
+| `initialize` | Start session |
 | `tools/list` | List available tools |
 | `tools/call` | Call a tool |
 | `cancel` | Cancel request |
 
 ---
 
-## 10. Integration Points
+## 10. Extending the System
 
-### Adding a New Provisioner
+### Key Extension Points
+
+1. **New Provisioner**: Implement `Provisioner` interface in `orchestrator/src/provisioning/`
+2. **New Transport**: Add case in `internal/service/mcp/util.go`
+3. **New Selection Strategy**: Add to `orchestrator/src/discovery/selection/ranking.ts`
+4. **New Admin Endpoint**: Add route in `orchestrator/src/server/admin.ts`
+
+### Configuration
+
+All configuration is via environment variables. Add new ones:
 
 ```typescript
-// 1. Implement the Provisioner interface
-export class LambdaProvisioner implements Provisioner {
-  async provision(userId: string): Promise<{ baseUrl: string }> {
-    // Create Lambda function and API Gateway
-    const functionArn = await this.createFunction(userId);
-    const apiUrl = await this.createApiGateway(functionArn);
-    return { baseUrl: apiUrl };
-  }
-  
-  async stop(userId: string): Promise<void> {
-    // Teardown Lambda and API Gateway
-  }
-  
-  async isHealthy(baseUrl: string): Promise<boolean> {
-    // Check if Lambda is responsive
-  }
-}
-
-// 2. Register in provisioning/types.ts
-export async function getProvisioner(): Promise<Provisioner> {
-  switch (cfg.provisioner) {
-    case 'lambda':
-      return new LambdaProvisioner();
-    // ...
-  }
-}
-
-// 3. Add config schema
-PROVISIONER: z.enum(['none', 'docker', 'k8s', 'lambda']),
+// orchestrator/src/config/schema.ts
+export const configSchema = z.object({
+  // Add your new config
+  AWS_REGION: z.string().optional(),
+  LAMBDA_ROLE_ARN: z.string().optional(),
+});
 ```
 
-### Adding a New Discovery Source
+### Testing
 
-```typescript
-// 1. Create service in discovery/
-export async function searchExternalCatalog(query: string): Promise<Tool[]> {
-  // Search external tool catalog
-}
+```bash
+# Run Go tests
+cd /MCPJungle && go test ./...
 
-// 2. Integrate in search/index.ts
-export async function searchTools(query: string): Promise<ToolWithScore[]> {
-  const [supabaseResults, externalResults] = await Promise.all([
-    findSimilarTools(embedding),
-    searchExternalCatalog(query),
-  ]);
-  
-  return mergeAndRank(supabaseResults, externalResults);
-}
-```
+# Run TypeScript tests
+cd /MCPJungle/orchestrator && npm test
 
-### Connecting Lambda Infrastructure
-
-**Expected Interface:**
-
-```typescript
-interface LambdaToolInvoker {
-  // Invoke a tool hosted on Lambda
-  invoke(params: {
-    userId: string;
-    toolId: string;
-    toolName: string;
-    deploymentType: 'PUBLIC' | 'PRIVATE';
-    arguments: Record<string, unknown>;
-  }): Promise<{
-    success: boolean;
-    result?: unknown;
-    error?: string;
-  }>;
-}
-
-// Integration in orchestrator upstream handling:
-async function forwardToLambda(tool: ToolMetadata, args: unknown) {
-  const invoker = getLambdaInvoker();
-  
-  if (tool.deploymentType === 'PUBLIC') {
-    // Use shared Lambda
-    return invoker.invoke({
-      toolId: tool.id,
-      deploymentType: 'PUBLIC',
-      arguments: args,
-    });
-  } else {
-    // Check if user has active instance
-    const instance = await getActiveInstance(userId, tool.id);
-    if (!instance) {
-      // Provision new instance
-      instance = await invoker.provision(userId, tool);
-    }
-    return invoker.invoke({ ...params, instanceArn: instance.functionArn });
-  }
-}
+# Run specific test file
+npm test -- tests/sprint4-5/e2e_auto_mode.spec.ts
 ```
 
 ---
 
-## 11. Security Model
-
-### Authentication Layers
-
-1. **Orchestrator → Jungle**: Bearer token (`JUNGLE_TOKEN`)
-2. **AI Agent → Orchestrator**: User ID header (`X-User-Id`)
-3. **Jungle Enterprise Mode**: Client access tokens
-
-### Authorization
-
-```go
-// Go: Check client access to server
-func (c *McpClient) CheckHasServerAccess(serverName string) bool {
-    var allowedServers []string
-    json.Unmarshal(c.AllowList, &allowedServers)
-    for _, allowed := range allowedServers {
-        if allowed == serverName {
-            return true
-        }
-    }
-    return false
-}
-```
-
-```typescript
-// TypeScript: Method whitelist
-const allowed = new Set(['initialize', 'tools/list', 'tools/call', 'cancel']);
-
-export function authorizeMethods() {
-  return (req, res, next) => {
-    const method = req.body?.method;
-    if (!allowed.has(method)) {
-      return res.json(MethodNotFound(req.body?.id));
-    }
-    next();
-  };
-}
-```
-
-### Rate Limiting
-
-```typescript
-// orchestrator/src/security/rateLimit.ts
-export function simpleRateLimit(max: number, windowMs: number) {
-  const requests = new Map<string, number[]>();
-  
-  return (req, res, next) => {
-    const key = req.ip;
-    const now = Date.now();
-    const timestamps = requests.get(key) || [];
-    const recent = timestamps.filter(t => now - t < windowMs);
-    
-    if (recent.length >= max) {
-      return res.status(429).json({ error: 'Rate limit exceeded' });
-    }
-    
-    recent.push(now);
-    requests.set(key, recent);
-    next();
-  };
-}
-```
-
-### Sandbox Security (CodeMode)
-
-- **Memory Isolation**: V8 isolates with configurable memory limits
-- **Execution Timeout**: Configurable max execution time
-- **No Direct I/O**: All tool calls go through the proxy
-- **Dangerous Pattern Detection**: Block `require()`, `import`, `process.`, etc.
-
----
-
-## 12. Deployment
-
-### Docker Compose (Local Dev)
-
-```yaml
-# orchestrator/docker-compose.yml
-version: '3.8'
-services:
-  orchestrator:
-    build: .
-    ports:
-      - "8080:8080"
-    environment:
-      - JUNGLE_URL=http://jungle:9000
-      - ROUTING_MODE=shared
-    depends_on:
-      - jungle
-  
-  jungle:
-    image: mcpjungle/mcpjungle:latest
-    ports:
-      - "9000:9000"
-    environment:
-      - SERVER_MODE=development
-```
-
-### Kubernetes
-
-```yaml
-# orchestrator/deploy/k8s/deployment.yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: orchestrator
-spec:
-  replicas: 2
-  template:
-    spec:
-      containers:
-        - name: orchestrator
-          image: orchestrator:latest
-          ports:
-            - containerPort: 8080
-          env:
-            - name: JUNGLE_URL
-              value: "http://jungle-service:9000"
-            - name: SUPABASE_URL
-              valueFrom:
-                secretKeyRef:
-                  name: supabase-secrets
-                  key: url
-```
+## Appendix: Quick Reference
 
 ### Environment Variables
 
 ```bash
-# Core
-JUNGLE_URL=http://localhost:9000
-PORT=8080
-JUNGLE_TOKEN=your-auth-token
+# Orchestrator
+JUNGLE_URL=http://localhost:9000     # Jungle instance URL
+PORT=8080                            # Orchestrator port
+ROUTING_MODE=shared                  # shared | per_user
+PROVISIONER=docker                   # none | docker | k8s
+SUPABASE_URL=https://...             # For discovery
+SUPABASE_KEY=...                     # Supabase anon key
+OPENAI_API_KEY=sk-...                # For embeddings
 
-# Routing
-ROUTING_MODE=shared|per_user
-ROUTING_USER_TTL_MS=1800000
-PROVISIONER=none|docker|k8s
-PROVISION_ON_DEMAND=true
-
-# Discovery
-SUPABASE_URL=https://your-project.supabase.co
-SUPABASE_KEY=your-anon-key
-OPENAI_API_KEY=sk-...
-
-# CodeMode
-CODEMODE_TELEMETRY=true
-CODEMODE_PERSIST_CODE=false
+# Jungle
+PORT=9000                            # Jungle port
+SERVER_MODE=development              # development | enterprise
+DATABASE_URL=file:mcpjungle.db       # SQLite path
 ```
+
+### File Locations
+
+| What | Where |
+|------|-------|
+| Jungle entry | `main.go` |
+| Orchestrator entry | `orchestrator/src/server/dev.ts` |
+| Discovery logic | `orchestrator/src/discovery/` |
+| CodeMode | `orchestrator/src/codemode/` |
+| MCP proxy handler | `internal/service/mcp/proxy.go` |
+| Tool models | `internal/model/` |
 
 ---
 
-## 13. Extension Guide
-
-### Adding Support for New MCP Transport
-
-**In Go (Registry):**
-
-```go
-// 1. Add transport type
-// pkg/types/mcp_server.go
-const TransportLambda McpServerTransport = "lambda"
-
-// 2. Add config struct
-// internal/model/mcp_server.go
-type LambdaConfig struct {
-    FunctionArn string `json:"function_arn"`
-    Region      string `json:"region"`
-}
-
-// 3. Add session creator
-// internal/service/mcp/util.go
-func createLambdaMcpServerConn(ctx context.Context, s *model.McpServer) (*client.Client, error) {
-    // Implement Lambda-based MCP client
-}
-
-func newMcpServerSession(ctx context.Context, s *model.McpServer) (*client.Client, error) {
-    switch s.Transport {
-    case types.TransportLambda:
-        return createLambdaMcpServerConn(ctx, s)
-    // ...
-    }
-}
-```
-
-### Adding a New Selection Strategy
-
-```typescript
-// orchestrator/src/discovery/selection/ranking.ts
-export function rankTools<T extends RankableTool>(
-  tools: T[],
-  strategy: SortStrategy
-): T[] {
-  switch (strategy) {
-    case 'similarity':
-      // New: sort by semantic similarity
-      return tools.sort((a, b) => (b.similarity ?? 0) - (a.similarity ?? 0));
-    case 'custom':
-      return customRankingLogic(tools);
-    // ...
-  }
-}
-```
-
-### Adding AI-Based Tool Validation
-
-**Future Enhancement:**
-
-```typescript
-// orchestrator/src/discovery/validation/aiValidator.ts
-export async function validateToolMatch(
-  userIntent: string,
-  tool: Tool
-): Promise<{ confidence: number; reasoning: string }> {
-  const response = await anthropic.messages.create({
-    model: 'claude-3-haiku-20240307',
-    messages: [{
-      role: 'user',
-      content: `Does this tool match the user's intent?
-        
-Intent: ${userIntent}
-
-Tool: ${tool.name}
-Description: ${tool.description}
-
-Respond with JSON: { "confidence": 0-1, "reasoning": "..." }`
-    }],
-  });
-  
-  return JSON.parse(response.content[0].text);
-}
-
-// Integration in discovery flow
-const candidates = await searchTools(query);
-const validated = await Promise.all(
-  candidates.map(async (tool) => ({
-    ...tool,
-    validation: await validateToolMatch(query, tool),
-  }))
-);
-const filtered = validated.filter(t => t.validation.confidence > 0.7);
-```
-
----
-
-## Appendix A: File Map
-
-```
-MCPJungle/
-├── main.go                          # Go entry point
-├── cmd/                             # CLI commands
-│   ├── start.go                     # Start server command
-│   ├── register.go                  # Register MCP server
-│   └── ...
-├── internal/                        # Go internal packages
-│   ├── api/                         # HTTP handlers
-│   ├── db/                          # Database connection
-│   ├── model/                       # GORM models
-│   ├── service/                     # Business logic
-│   │   ├── mcp/                     # MCP service
-│   │   └── ...
-│   └── telemetry/                   # OpenTelemetry
-├── pkg/                             # Public Go packages
-│   ├── types/                       # Shared types
-│   └── ...
-├── orchestrator/                    # TypeScript orchestrator
-│   ├── src/
-│   │   ├── server/                  # HTTP server
-│   │   ├── discovery/               # Tool discovery
-│   │   ├── codemode/                # Code execution
-│   │   ├── routing/                 # Request routing
-│   │   └── provisioning/            # Container provisioning
-│   └── ...
-├── codemode-standalone/             # Sandboxed executor
-│   ├── src/
-│   │   ├── core/                    # Engine core
-│   │   ├── execution/               # V8 isolate
-│   │   └── llm/                     # LLM integration
-│   └── ...
-└── docs/
-    └── ARCHITECTURE.md              # This document
-```
-
----
-
-## Appendix B: Glossary
-
-| Term | Definition |
-|------|------------|
-| **MCP** | Model Context Protocol - Standard for AI tool interaction |
-| **Jungle** | The Go registry server that manages MCP servers |
-| **Orchestrator** | TypeScript gateway layer for routing and discovery |
-| **CodeMode** | Sandboxed code execution engine |
-| **Tool** | A callable function exposed by an MCP server |
-| **Transport** | How to communicate with MCP server (stdio/http/sse) |
-| **Canonical Name** | Unique tool identifier: `<server>__<tool>` |
-| **HyDE** | Hypothetical Document Embeddings (query expansion technique) |
-| **RPC** | Remote Procedure Call (Supabase function) |
-
----
-
-*Document Version: 1.0*
+*Document Version: 2.0*  
 *Last Updated: January 6, 2026*
-
