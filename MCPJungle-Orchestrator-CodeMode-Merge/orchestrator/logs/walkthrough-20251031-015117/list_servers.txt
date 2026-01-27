@@ -1,0 +1,4 @@
+1. context7
+Context7
+Transport: streamable_http
+URL: https://mcp.context7.com/mcp

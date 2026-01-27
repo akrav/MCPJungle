@@ -1,0 +1,52 @@
+# ==============================================================================
+# Lambda MCP Adapter - Docker Ignore
+# ==============================================================================
+
+# Terraform files
+*.tf
+*.tfstate
+*.tfstate.*
+.terraform/
+.terraform.lock.hcl
+terraform.tfvars
+
+# Scripts (not needed in image)
+scripts/
+
+# Documentation
+README.md
+*.md
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Test files
+*.test.js
+*.spec.js
+__tests__/
+tests/
+
+# Development
+node_modules/
+*.log
+*.tmp
+
+# Build artifacts
+builds/
+*.zip
+
+# Local config
+.env
+.env.*

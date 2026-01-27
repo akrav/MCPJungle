@@ -1,0 +1,14 @@
+{
+  "name": "mcpjungle-workspace",
+  "private": true,
+  "version": "0.0.0",
+  "workspaces": [
+    "codemode-standalone",
+    "orchestrator"
+  ],
+  "engines": {
+    "node": ">=20 <21"
+  }
+}
+
+

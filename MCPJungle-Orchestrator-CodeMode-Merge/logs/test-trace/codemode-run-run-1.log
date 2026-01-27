@@ -1,0 +1,4 @@
+[2025-10-31T05:40:53.714Z] start runId=run-1 {"user_id":"u","catalog_hash":"h"}
+[2025-10-31T05:40:53.716Z] script_preview {"preview_len":8}
+[2025-10-31T05:40:53.718Z] compile_start 
+[2025-10-31T05:40:53.720Z] eval_start 

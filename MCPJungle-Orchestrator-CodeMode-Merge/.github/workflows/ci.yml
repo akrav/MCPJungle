@@ -1,0 +1,21 @@
+name: CI
+on:
+  push:
+    branches: [ Orchestrator-CodeMode-Merge ]
+  pull_request:
+jobs:
+  sprints:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        suite: [ 'tests/sprint3-bridge', 'tests/sprint4-obs', 'tests/sprint5-routing', 'tests/sprint6-provisioning', 'tests/sprint7-hardening' ]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm i
+      - run: |
+          cd orchestrator
+          npm i
+          OTEL_TEST=true npm test -- ${{ matrix.suite }}

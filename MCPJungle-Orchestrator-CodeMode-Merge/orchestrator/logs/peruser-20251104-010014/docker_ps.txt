@@ -1,0 +1,4 @@
+orchestrator-orchestrator-1	0.0.0.0:18081->8080/tcp, [::]:18081->8080/tcp
+orchestrator-jungle-1	0.0.0.0:9000->9000/tcp, [::]:9000->9000/tcp
+jungle-bob	0.0.0.0:55009->9000/tcp, [::]:55009->9000/tcp
+jungle-alice	0.0.0.0:55008->9000/tcp, [::]:55008->9000/tcp

@@ -1,0 +1,14 @@
+{
+  "name": "mock-mcp-tool",
+  "version": "1.0.0",
+  "description": "Mock MCP tool for testing Lambda adapter",
+  "main": "index.js",
+  "bin": {
+    "mock-mcp-tool": "./index.js"
+  },
+  "scripts": {
+    "start": "node index.js"
+  },
+  "keywords": ["mcp", "test", "mock"],
+  "license": "MIT"
+}

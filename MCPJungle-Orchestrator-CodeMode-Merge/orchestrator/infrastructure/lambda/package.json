@@ -1,0 +1,25 @@
+{
+  "name": "mcp-lambda-adapter",
+  "version": "1.0.0",
+  "description": "Dynamic MCP tool adapter for AWS Lambda",
+  "main": "index.js",
+  "type": "commonjs",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "mcp",
+    "lambda",
+    "serverless",
+    "mcpjungle"
+  ],
+  "author": "MCPJungle Team",
+  "license": "MIT",
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.500.0",
+    "lambda-stream": "^0.6.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

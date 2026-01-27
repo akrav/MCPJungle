@@ -1,0 +1,192 @@
+package api
+
+import (
+	"fmt"
+	"net/http"
+
+	"github.com/gin-gonic/gin"
+	"github.com/mcpjungle/mcpjungle/internal/model"
+	"github.com/mcpjungle/mcpjungle/pkg/types"
+)
+
+func (s *Server) registerServerHandler() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		var input types.RegisterServerInput
+		if err := c.ShouldBindJSON(&input); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+
+		transport, err := types.ValidateTransport(input.Transport)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+
+		var server *model.McpServer
+
+		switch transport {
+		case types.TransportStreamableHTTP:
+			server, err = model.NewStreamableHTTPServer(
+				input.Name,
+				input.Description,
+				input.URL,
+				input.BearerToken,
+			)
+			if err != nil {
+				c.JSON(
+					http.StatusBadRequest,
+					gin.H{"error": fmt.Sprintf("Error creating streamable http server: %v", err)},
+				)
+				return
+			}
+		case types.TransportStdio:
+			server, err = model.NewStdioServer(
+				input.Name,
+				input.Description,
+				input.Command,
+				input.Args,
+				input.Env,
+			)
+			if err != nil {
+				c.JSON(
+					http.StatusBadRequest,
+					gin.H{"error": fmt.Sprintf("Error creating stdio server: %v", err)},
+				)
+				return
+			}
+		case types.TransportLambda:
+			// Lambda transport requires function URL, tool name, and optionally tool version
+			server, err = model.NewLambdaServer(
+				input.Name,
+				input.Description,
+				input.URL,         // Function URL
+				input.ToolName,    // Tool name to load
+				input.ToolVersion, // Tool version (defaults to "latest")
+				"",                // Region (optional, auto-detected from URL)
+			)
+			if err != nil {
+				c.JSON(
+					http.StatusBadRequest,
+					gin.H{"error": fmt.Sprintf("Error creating Lambda server: %v", err)},
+				)
+				return
+			}
+		case types.TransportSSE:
+			server, err = model.NewSSEServer(
+				input.Name,
+				input.Description,
+				input.URL,
+				input.BearerToken,
+			)
+			if err != nil {
+				c.JSON(
+					http.StatusBadRequest,
+					gin.H{"error": fmt.Sprintf("Error creating SSE server: %v", err)},
+				)
+				return
+			}
+		default:
+			c.JSON(
+				http.StatusBadRequest,
+				gin.H{"error": fmt.Sprintf("Unsupported transport type: %s", transport)},
+			)
+			return
+		}
+
+		if err := s.mcpService.RegisterMcpServer(c, server); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+
+		c.JSON(http.StatusCreated, server)
+	}
+}
+
+func (s *Server) deregisterServerHandler() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		name := c.Param("name")
+
+		if err := s.mcpService.DeregisterMcpServer(name); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+
+		c.Status(http.StatusNoContent)
+	}
+}
+
+func (s *Server) listServersHandler() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		records, err := s.mcpService.ListMcpServers()
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+
+		servers := make([]*types.McpServer, len(records))
+
+		for i, record := range records {
+			servers[i] = &types.McpServer{
+				Name:        record.Name,
+				Transport:   string(record.Transport),
+				Description: record.Description,
+			}
+
+			switch record.Transport {
+			case types.TransportStreamableHTTP:
+				conf, err := record.GetStreamableHTTPConfig()
+				if err != nil {
+					c.JSON(
+						http.StatusInternalServerError,
+						gin.H{
+							"error": fmt.Sprintf("Error getting streamable HTTP config for server %s: %v", record.Name, err),
+						},
+					)
+					return
+				}
+				servers[i].URL = conf.URL
+			case types.TransportStdio:
+				conf, err := record.GetStdioConfig()
+				if err != nil {
+					c.JSON(
+						http.StatusInternalServerError,
+						gin.H{
+							"error": fmt.Sprintf("Error getting stdio config for server %s: %v", record.Name, err),
+						},
+					)
+					return
+				}
+				servers[i].Command = conf.Command
+				servers[i].Args = conf.Args
+				servers[i].Env = conf.Env
+			case types.TransportLambda:
+				conf, err := record.GetLambdaConfig()
+				if err != nil {
+					c.JSON(
+						http.StatusInternalServerError,
+						gin.H{
+							"error": fmt.Sprintf("Error getting Lambda config for server %s: %v", record.Name, err),
+						},
+					)
+					return
+				}
+				servers[i].URL = conf.FunctionURL
+			case types.TransportSSE:
+				conf, err := record.GetSSEConfig()
+				if err != nil {
+					c.JSON(
+						http.StatusInternalServerError,
+						gin.H{
+							"error": fmt.Sprintf("Error getting SSE config for server %s: %v", record.Name, err),
+						},
+					)
+					return
+				}
+				servers[i].URL = conf.URL
+			}
+		}
+
+		c.JSON(http.StatusOK, servers)
+	}
+}
