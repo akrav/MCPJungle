@@ -28,7 +28,7 @@ const ARTIFACT_BUCKET = process.env.ARTIFACT_BUCKET;
 const BASE_PATH = '/tmp/mcp-tools';
 
 // Timeouts
-const POST_TIMEOUT_MS = 30 * 1000;       // 30 seconds for tool calls
+const POST_TIMEOUT_MS = 120 * 1000;      // 120 seconds for tool calls (increased for slow external APIs)
 const GET_TIMEOUT_MS = 14 * 60 * 1000;   // 14 minutes for SSE connections
 
 // ==============================================================================

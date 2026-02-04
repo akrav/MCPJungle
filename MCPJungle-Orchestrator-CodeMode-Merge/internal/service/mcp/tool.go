@@ -361,6 +361,46 @@ func (m *MCPService) registerServerTools(ctx context.Context, s *model.McpServer
 	return nil
 }
 
+// registerLambdaServerTools fetches all tools from a Lambda MCP server and registers them in the DB.
+func (m *MCPService) registerLambdaServerTools(ctx context.Context, s *model.McpServer, c *LambdaClient) error {
+	// fetch all tools from the Lambda server so they can be added to the DB
+	resp, err := c.ListTools(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to fetch tools from Lambda MCP server %s: %w", s.Name, err)
+	}
+	for _, tool := range resp.Tools {
+		canonicalToolName := mergeServerToolNames(s.Name, tool.GetName())
+
+		// extracting json schema is currently on best-effort basis
+		// if it fails, we log the error and continue with the next tool
+		jsonSchema, _ := json.Marshal(tool.InputSchema)
+
+		t := &model.Tool{
+			ServerID:    s.ID,
+			Name:        tool.GetName(),
+			Description: tool.Description,
+			InputSchema: jsonSchema,
+		}
+		if err := m.db.Create(t).Error; err != nil {
+			// If registration of a tool fails, we should not fail the entire server registration.
+			// Instead, continue with the next tool.
+			log.Printf("[ERROR] failed to register tool %s in DB: %v", canonicalToolName, err)
+			continue
+		}
+
+		// Set tool name to include the server name prefix to make it recognizable by MCPJungle
+		// then add the tool to the MCP proxy server (Lambda uses the standard proxy, not SSE)
+		tool.Name = canonicalToolName
+		m.mcpProxyServer.AddTool(tool, m.MCPProxyToolCallHandler)
+
+		// also add the tool to the in-memory tool instance tracker
+		m.addToolInstance(tool)
+		// notify any registered callbacks about the tool addition
+		m.notifyToolAddition(tool.Name)
+	}
+	return nil
+}
+
 // deregisterServerTools deletes all tools that belong to an MCP server from the DB.
 // It also removes the tools from the MCP proxy server.
 func (m *MCPService) deregisterServerTools(s *model.McpServer) error {

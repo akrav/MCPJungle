@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/mcpjungle/mcpjungle/internal/model"
+	"github.com/mcpjungle/mcpjungle/pkg/types"
 )
 
 // RegisterMcpServer registers a new MCP server in the database.
@@ -14,6 +15,11 @@ import (
 func (m *MCPService) RegisterMcpServer(ctx context.Context, s *model.McpServer) error {
 	if err := validateServerName(s.Name); err != nil {
 		return err
+	}
+
+	// Handle Lambda transport separately since it uses a different client type
+	if s.Transport == types.TransportLambda {
+		return m.registerLambdaServer(ctx, s)
 	}
 
 	mcpClient, err := newMcpServerSession(ctx, s)
@@ -29,6 +35,26 @@ func (m *MCPService) RegisterMcpServer(ctx context.Context, s *model.McpServer) 
 
 	if err = m.registerServerTools(ctx, s, mcpClient); err != nil {
 		return fmt.Errorf("failed to register tools for MCP server %s: %w", s.Name, err)
+	}
+	return nil
+}
+
+// registerLambdaServer handles registration for Lambda-based MCP servers.
+// Lambda servers use a different client type that communicates via HTTP/SSE.
+func (m *MCPService) registerLambdaServer(ctx context.Context, s *model.McpServer) error {
+	lambdaClient, err := createLambdaMcpServerConn(ctx, s)
+	if err != nil {
+		return fmt.Errorf("failed to create Lambda client for %s: %w", s.Name, err)
+	}
+	defer lambdaClient.Close()
+
+	// register the server in the DB
+	if err := m.db.Create(s).Error; err != nil {
+		return fmt.Errorf("failed to register mcp server: %w", err)
+	}
+
+	if err = m.registerLambdaServerTools(ctx, s, lambdaClient); err != nil {
+		return fmt.Errorf("failed to register tools for Lambda MCP server %s: %w", s.Name, err)
 	}
 	return nil
 }
