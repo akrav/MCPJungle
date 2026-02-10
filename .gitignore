@@ -16,6 +16,7 @@
 
 # Dependency directories
 vendor/
+node_modules/
 
 # Go workspace file
 go.work
@@ -35,3 +36,10 @@ dist/
 mcpjungle
 mcp.db
 mcpjungle.db
+
+# Build artifacts
+*.zip
+function.zip
+
+# Old orchestrator build folder at root (legacy)
+/orchestrator/
