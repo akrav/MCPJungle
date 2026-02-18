@@ -84,6 +84,75 @@ curl -X POST "${LAMBDA_URL}?tool=context7&version=latest" \
   -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}'
 ```
 
+## Supported Languages
+
+The Lambda adapter supports multiple programming languages for MCP servers:
+
+| Language | Detection Method | Requirements |
+|----------|-----------------|--------------|
+| **Python** | `main.py`, `app.py`, `index.py`, or manifest | Python 3.9+ installed in image |
+| **Node.js** | `node_modules/.bin/*` or `package.json` + `index.js` | Node.js 20 installed |
+| **Binary (Go/Rust/C#)** | `manifest.json` with explicit command | Linux AMD64 binary |
+
+### Runtime Resolution Priority
+
+The adapter resolves which runtime to use in this order:
+
+1. **manifest.json (MCP Bundle Standard)** - If present, uses `server.command` and `server.args`
+2. **mcp.json (Custom format)** - Legacy format with `executable` and `args`
+3. **Python Heuristic** - Looks for `main.py`, `app.py`, `index.py`, or `__main__.py`
+4. **Node.js Heuristic** - Looks for executables in `node_modules/.bin/` or `package.json` + `index.js`
+
+## Manifest Files
+
+### manifest.json (MCP Bundle Standard)
+
+The recommended manifest format following the MCP Bundle specification:
+
+```json
+{
+  "manifest_version": "0.1",
+  "name": "my-tool",
+  "version": "1.0.0",
+  "server": {
+    "type": "python",
+    "command": "python3",
+    "args": ["main.py", "--verbose"],
+    "env": {
+      "PYTHONUNBUFFERED": "1"
+    }
+  }
+}
+```
+
+### mcp.json (Custom/Legacy)
+
+A simpler custom format for backward compatibility:
+
+```json
+{
+  "spec": "1.0",
+  "runtime": "python",
+  "executable": "main.py",
+  "args": ["--custom-flag"],
+  "env": {
+    "PYTHONUNBUFFERED": "1"
+  }
+}
+```
+
+## Supported Package Formats
+
+The adapter supports multiple compression formats:
+
+| Format | Extension | Notes |
+|--------|-----------|-------|
+| ZIP | `.zip` | Standard, recommended |
+| TAR.GZ | `.tar.gz`, `.tgz` | Good for preserving permissions |
+| MCP Bundle | `.mcpb` | Treated as ZIP internally |
+
+---
+
 ## Configuration Variables
 
 | Variable | Description | Default |
@@ -144,7 +213,9 @@ Increase `lambda_memory_size` - more memory = faster CPU = faster unzip.
 
 ### Tool not found in S3
 
-Check the S3 path format: `packages/<tool_name>/<version>.zip`
+Check the S3 path format: `packages/<tool_name>/<version>.<ext>`
+
+Supported extensions: `.zip`, `.tar.gz`, `.tgz`, `.mcpb`
 
 ### Permission denied when running binary
 

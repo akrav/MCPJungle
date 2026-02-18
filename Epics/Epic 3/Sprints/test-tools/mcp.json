@@ -1,0 +1,9 @@
+{
+  "spec": "1.0",
+  "runtime": "python",
+  "executable": "main.py",
+  "args": ["--custom-test"],
+  "env": {
+    "PYTHONUNBUFFERED": "1"
+  }
+}

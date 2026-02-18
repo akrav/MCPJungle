@@ -24,10 +24,14 @@ WORKDIR /var/task
 # We need native 'unzip' to preserve symlinks in npm packages.
 # The 'unzip' command properly handles symlinks in .bin directories,
 # which is critical for npm package binaries to work.
+# Added python3, pip, tar, gzip for polyglot support.
 
-RUN dnf install -y unzip && \
+RUN dnf install -y unzip python3 python3-pip tar gzip shadow-utils && \
     dnf clean all && \
     rm -rf /var/cache/dnf
+
+# Ensure Pip is up to date
+RUN python3 -m pip install --upgrade pip
 
 # ------------------------------------------------------------------------------
 # Install Node.js Dependencies

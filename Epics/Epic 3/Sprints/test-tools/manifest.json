@@ -1,0 +1,14 @@
+{
+  "manifest_version": "0.1",
+  "name": "python-manifest-test",
+  "version": "1.0.0",
+  "description": "Test MCP server for verifying manifest.json support",
+  "server": {
+    "type": "python",
+    "command": "python3",
+    "args": ["main.py", "--manifest-test"],
+    "env": {
+      "PYTHONUNBUFFERED": "1"
+    }
+  }
+}
